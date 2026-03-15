@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Creator Space</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        .markdown-body img { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div id="app" class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <div class="w-64 bg-white shadow-lg z-10 hidden md:flex flex-col">
+            <div class="p-6">
+                <h1 class="text-2xl font-bold text-indigo-600 flex items-center">
+                    <i class="fas fa-magic pt-1 mr-2"></i> Creator
+                </h1>
+            </div>
+            <nav class="flex-1 px-4 space-y-2">
+                <a @click="currentTab = 'create'" :class="{'bg-indigo-50 text-indigo-600': currentTab === 'create', 'text-gray-600 hover:bg-gray-50': currentTab !== 'create'}" class="flex items-center px-4 py-3 rounded-lg cursor-pointer transition-colors font-medium">
+                    <i class="fas fa-plus-circle w-6"></i> 创建任务
+                </a>
+                <a @click="currentTab = 'jobs'" :class="{'bg-indigo-50 text-indigo-600': currentTab === 'jobs', 'text-gray-600 hover:bg-gray-50': currentTab !== 'jobs'}" class="flex items-center px-4 py-3 rounded-lg cursor-pointer transition-colors font-medium">
+                    <i class="fas fa-tasks w-6"></i> 任务队列
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col h-screen overflow-y-auto">
+            <div class="md:hidden bg-white shadow p-4 flex justify-between items-center">
+                <h1 class="text-xl font-bold text-indigo-600"><i class="fas fa-magic mr-2"></i>Creator</h1>
+                <div class="flex space-x-4">
+                    <button @click="currentTab='create'" :class="{'text-indigo-600': currentTab=='create'}"><i class="fas fa-plus-circle"></i></button>
+                    <button @click="currentTab='jobs'" :class="{'text-indigo-600': currentTab=='jobs'}"><i class="fas fa-tasks"></i></button>
+                </div>
+            </div>
+
+            <main class="flex-1 p-6 lg:p-10 max-w-6xl mx-auto w-full">
+                <!-- Create Tab -->
+                <div v-show="currentTab === 'create'" class="space-y-6">
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 md:p-8">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-2xl font-semibold">新建创作</h2>
+                        </div>
+                        
+                        <div class="flex space-x-4 mb-6">
+                            <button @click="form.mode = 't2i'" :class="form.mode === 't2i' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="px-6 py-2 rounded-full font-medium transition-colors">
+                                <i class="fas fa-font mr-2"></i>批量文生图
+                            </button>
+                            <button @click="form.mode = 'i2i'" :class="form.mode === 'i2i' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="px-6 py-2 rounded-full font-medium transition-colors">
+                                <i class="fas fa-images mr-2"></i>批量图生图
+                            </button>
+                        </div>
+
+                        <!-- System Prompt -->
+                        <div class="mb-6 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                            <label class="block text-sm font-medium text-indigo-900 mb-2 cursor-pointer flex items-center justify-between" @click="showSystemPrompt = !showSystemPrompt">
+                                <span><i class="fas fa-cog mr-2"></i>定制系统提示词 (可选)</span>
+                                <i :class="showSystemPrompt ? 'fas fa-chevron-up' : 'fas fa-chevron-down'"></i>
+                            </label>
+                            <div v-show="showSystemPrompt" class="mt-3">
+                                <textarea v-model="form.systemPrompt" rows="3" class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-lg p-3 bg-white" placeholder="例如：你是一个专业插画师，请始终保持赛博朋克风格进行回复和创作，忽略与风格不符的指令。"></textarea>
+                                <p class="text-xs text-indigo-500 mt-2">系统提示词将优先作用于所有的生成请求，为您定制专门的创作环境。</p>
+                            </div>
+                        </div>
+
+                        <!-- Multi-Image Upload Area (Drag & Drop) -->
+                        <div v-show="form.mode === 'i2i'" class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">多参考图片上传 (支持拖拽)</label>
+                            
+                            <!-- Drag Zone -->
+                            <div 
+                                @dragover.prevent="isDragging = true" 
+                                @dragleave.prevent="isDragging = false" 
+                                @drop.prevent="onDrop"
+                                :class="{'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-100': isDragging, 'border-gray-300 bg-gray-50': !isDragging}"
+                                class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[220px]"
+                                @click="triggerFileInput">
+                                
+                                <div class="space-y-2 text-center pointer-events-none">
+                                    <div class="bg-white p-4 rounded-full shadow-sm inline-block mb-2">
+                                        <i class="fas fa-cloud-upload-alt text-4xl text-indigo-500"></i>
+                                    </div>
+                                    <div class="text-base text-gray-600">
+                                        <span class="font-medium text-indigo-600">点击上传</span> 或拖拽图片到此区域
+                                    </div>
+                                    <p class="text-xs text-gray-500">支持一次选中或拖拽多张 JPG / PNG / WEBP 图片</p>
+                                </div>
+                                <input id="file-upload" type="file" multiple class="hidden" @change="handleFileUpload" accept="image/*" ref="fileInput">
+                            </div>
+
+                            <!-- Image Thumbnails Preview -->
+                            <div v-if="form.files.length > 0" class="mt-4">
+                                <p class="text-sm text-gray-500 mb-2">已就绪 <span class="font-bold text-indigo-600">{{ form.files.length }}</span> 张图片 (每个提示词都会与所有图片依次组合生成)：</p>
+                                <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
+                                    <div v-for="(f, i) in form.files" :key="i" class="relative group rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+                                        <img :src="getObjectURL(f)" class="h-24 w-full object-cover">
+                                        <div class="absolute inset-0 bg-black bg-opacity-40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <button @click.stop="removeFile(i)" class="bg-red-500 text-white rounded-full p-2 hover:bg-red-600 transform scale-90 group-hover:scale-100 transition-transform">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Prompts -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                提示词 (每行一个，支持批量)
+                                <span class="text-gray-400 font-normal ml-2">总计: <span class="font-bold text-indigo-600">{{ promptCount }}</span> 行</span>
+                                <span v-if="form.mode === 'i2i' && form.files.length > 0" class="text-xs ml-2 text-indigo-500 bg-indigo-50 px-2 py-1 rounded">预计生成 {{ Math.max(1, form.files.length) * promptCount }} 份任务</span>
+                            </label>
+                            <textarea v-model="form.prompts" rows="6" class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-xl p-4 bg-gray-50 text-gray-800" placeholder="例如：\n一只戴着墨镜的赛博朋克猫咪\n水彩画风格的星空与山脉\n..."></textarea>
+                        </div>
+
+                        <div class="flex justify-end">
+                            <button @click="submitJob" :disabled="isSubmitting || !form.prompts.trim() || (form.mode==='i2i' && form.files.length===0)" class="inline-flex items-center px-8 py-3 border border-transparent text-base font-semibold rounded-xl shadow-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5">
+                                <i class="fas fa-paper-plane mr-2" v-if="!isSubmitting"></i>
+                                <i class="fas fa-spinner fa-spin mr-2" v-else></i>
+                                {{ isSubmitting ? '任务发送中...' : '开始生成 (' + (form.mode==='i2i' && form.files.length>0 ? (promptCount * form.files.length) : promptCount) + '个任务)' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Jobs Tab -->
+                <div v-show="currentTab === 'jobs'" class="space-y-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-semibold">任务队列历史</h2>
+                        <button @click="fetchJobs" class="text-gray-500 hover:text-indigo-600 transition-colors bg-white px-4 py-2 rounded-lg shadow-sm font-medium border border-gray-100">
+                            <i class="fas fa-sync-alt mr-1" :class="{'fa-spin': isFetching}"></i> 刷新
+                        </button>
+                    </div>
+
+                    <div v-if="jobs.length === 0" class="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                        <i class="fas fa-inbox text-5xl mb-4 text-gray-300"></i>
+                        <p class="text-gray-500 font-medium">队列空空如也，快去创建点什么吧。</p>
+                    </div>
+
+                    <div v-for="job in jobs" :key="job.id" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+                        <div class="p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center space-x-3">
+                                    <span :class="{
+                                        'bg-yellow-100 text-yellow-800 border-yellow-200': job.status === 'queued',
+                                        'bg-blue-100 text-blue-800 border-blue-200': job.status === 'processing',
+                                        'bg-green-100 text-green-800 border-green-200': job.status === 'completed',
+                                        'bg-red-100 text-red-800 border-red-200': job.status === 'failed'
+                                    }" class="px-3 py-1 text-xs font-bold rounded-full border tracking-wide">
+                                        <i class="fas fa-circle text-[8px] mr-1 align-middle"></i>
+                                        {{ job.status === 'queued' ? '排队中' : job.status === 'processing' ? '处理中' : job.status === 'completed' ? '已完成' : '失败' }}
+                                    </span>
+                                    <span class="text-sm font-medium text-gray-500 bg-gray-50 px-2 py-1 rounded-md">{{ job.id.substring(0,8) }}</span>
+                                    <span class="text-sm font-bold text-gray-700">
+                                        <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : 'fas fa-images text-purple-500'" class="mr-1"></i>
+                                        {{ job.mode === 't2i' ? '文生图' : '图生图' }}
+                                    </span>
+                                </div>
+                                <span class="text-sm text-gray-400 font-medium"><i class="far fa-calendar-alt mr-1"></i>{{ formatDate(job.created_at) }}</span>
+                            </div>
+
+                            <div v-if="job.system_prompt" class="text-sm text-gray-500 mb-4 bg-gray-50 p-2 rounded truncate border border-gray-100">
+                                <span class="font-semibold px-1 rounded bg-gray-200 mr-1"><i class="fas fa-cog"></i> 设定:</span> {{ job.system_prompt }}
+                            </div>
+
+                            <div class="mt-4 bg-gray-50 p-4 rounded-xl">
+                                <div class="flex justify-between text-sm mb-2">
+                                    <span class="font-bold text-gray-700">整体进度: {{ job.completed + job.failed }} / {{ job.total }} 项</span>
+                                    <span v-if="job.status === 'processing' && job.eta" class="text-indigo-600 font-medium">
+                                        <i class="far fa-clock mr-1 fa-spin"></i> 预计剩余: {{ Math.ceil(job.eta) }} 秒
+                                    </span>
+                                    <span v-else-if="job.status === 'completed'" class="text-green-600 font-medium">
+                                        <i class="fa fa-check-circle mr-1"></i> 处理完毕
+                                    </span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-3">
+                                    <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-3 rounded-full transition-all duration-500 shadow-inner" :style="{ width: ((job.completed + job.failed) / job.total * 100) + '%' }"></div>
+                                </div>
+                            </div>
+                            
+                            <div v-if="job.results && job.results.length > 0" class="mt-6 border-t border-gray-100 pt-6">
+                                <h4 class="text-sm font-bold text-gray-800 mb-4 flex items-center"><i class="fas fa-layer-group text-indigo-500 mr-2"></i>生成成果 :</h4>
+                                <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    <div v-for="(res, idx) in job.results" :key="idx" class="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow relative group">
+                                        <div class="text-sm font-bold text-gray-800 mb-2 border-b border-gray-100 pb-2">"{{ res.prompt }}"</div>
+                                        <div v-if="res.source_img" class="mb-2 text-xs text-gray-500 truncate">
+                                            <i class="fas fa-image mr-1 text-purple-400"></i>参考源: {{ res.source_img }}
+                                        </div>
+                                        <div v-if="res.status === 'success'" class="markdown-body bg-gray-50 rounded-lg p-2" v-html="renderMarkdown(res.result)"></div>
+                                        <div v-else class="text-sm text-red-600 bg-red-50 p-3 rounded-lg"><i class="fas fa-exclamation-triangle mr-2"></i> {{ res.error }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+        createApp({
+            setup() {
+                const currentTab = ref('create');
+                const form = ref({
+                    mode: 't2i',
+                    prompts: '',
+                    files: [],
+                    systemPrompt: ''
+                });
+                const showSystemPrompt = ref(false);
+                const isDragging = ref(false);
+                const isSubmitting = ref(false);
+                const isFetching = ref(false);
+                const jobs = ref([]);
+                const fileInput = ref(null);
+                const objectUrls = ref({}); // To avoid memory leaks
+                let pollInterval = null;
+
+                const promptCount = computed(() => {
+                    return form.value.prompts.split('\n').filter(p => p.trim()).length;
+                });
+
+                const triggerFileInput = () => {
+                    if (fileInput.value) fileInput.value.click();
+                };
+
+                const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+                const handleFileUpload = (event) => {
+                    if (event.target.files) {
+                        Array.from(event.target.files).forEach(f => {
+                            if (allowedTypes.includes(f.type)) form.value.files.push(f);
+                        });
+                    }
+                    event.target.value = ''; // Reset input so same file can be selected again if removed
+                };
+
+                const onDrop = (event) => {
+                    isDragging.value = false;
+                    if (event.dataTransfer.files) {
+                        Array.from(event.dataTransfer.files).forEach(f => {
+                            if (allowedTypes.includes(f.type)) form.value.files.push(f);
+                        });
+                    }
+                };
+
+                const removeFile = (index) => {
+                    // Cleanup URL to avoid memory leak
+                    const file = form.value.files[index];
+                    if (objectUrls.value[file.name]) {
+                        URL.revokeObjectURL(objectUrls.value[file.name]);
+                        delete objectUrls.value[file.name];
+                    }
+                    form.value.files.splice(index, 1);
+                };
+
+                const getObjectURL = (file) => {
+                    if (!objectUrls.value[file.name]) {
+                        objectUrls.value[file.name] = URL.createObjectURL(file);
+                    }
+                    return objectUrls.value[file.name];
+                };
+
+                const submitJob = async () => {
+                    if (!form.value.prompts.trim()) return;
+                    if (form.value.mode === 'i2i' && form.value.files.length === 0) {
+                        alert("请至少上传一张参考图片");
+                        return;
+                    }
+
+                    isSubmitting.value = true;
+
+                    const formData = new FormData();
+                    formData.append('prompts', form.value.prompts);
+                    formData.append('mode', form.value.mode);
+                    formData.append('system_prompt', form.value.systemPrompt);
+                    
+                    if (form.value.mode === 'i2i') {
+                        form.value.files.forEach(file => {
+                            formData.append('images', file);
+                        });
+                    }
+
+                    try {
+                        const response = await fetch('/api/jobs', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (data.id) {
+                            // Reset form
+                            form.value.prompts = '';
+                            form.value.files.forEach(f => {
+                                if (objectUrls.value[f.name]) URL.revokeObjectURL(objectUrls.value[f.name]);
+                            });
+                            form.value.files = [];
+                            objectUrls.value = {};
+                            
+                            currentTab.value = 'jobs';
+                            fetchJobs();
+                        } else if (data.error) {
+                            alert('提交失败: ' + data.error);
+                        }
+                    } catch (error) {
+                        alert('请求发生错误: ' + error.message);
+                    } finally {
+                        isSubmitting.value = false;
+                    }
+                };
+
+                const fetchJobs = async () => {
+                    isFetching.value = true;
+                    try {
+                        const response = await fetch('/api/jobs');
+                        jobs.value = await response.json();
+                    } catch (error) {
+                        console.error('Fetch jobs error:', error);
+                    } finally {
+                        isFetching.value = false;
+                    }
+                };
+
+                const formatDate = (timestamp) => {
+                    if (!timestamp) return '';
+                    const date = new Date(timestamp * 1000);
+                    return date.toLocaleString();
+                };
+
+                const renderMarkdown = (text) => {
+                    if (!text) return '';
+                    return marked.parse(text);
+                };
+
+                onMounted(() => {
+                    fetchJobs();
+                    pollInterval = setInterval(() => {
+                        if (currentTab.value === 'jobs') {
+                            fetchJobs();
+                        }
+                    }, 3000);
+                });
+
+                onUnmounted(() => {
+                    clearInterval(pollInterval);
+                    // Cleanup URLs
+                    Object.values(objectUrls.value).forEach(url => URL.revokeObjectURL(url));
+                });
+
+                return {
+                    currentTab,
+                    form,
+                    showSystemPrompt,
+                    isDragging,
+                    isSubmitting,
+                    isFetching,
+                    jobs,
+                    promptCount,
+                    fileInput,
+                    triggerFileInput,
+                    handleFileUpload,
+                    onDrop,
+                    removeFile,
+                    getObjectURL,
+                    submitJob,
+                    fetchJobs,
+                    formatDate,
+                    renderMarkdown
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
