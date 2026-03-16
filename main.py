@@ -5,7 +5,10 @@ import os
 import re
 import base64
 import json
+from dotenv import load_dotenv
 from typing import List, Optional
+
+load_dotenv()
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,13 +48,17 @@ USERS = config.get("users", {})
 SESSIONS = {}
 
 # Init SDK
+api_key = os.getenv("GENAI_API_KEY", "")
+api_endpoint = os.getenv("GENAI_API_ENDPOINT", "http://127.0.0.1:8045")
+model_name = os.getenv("GENAI_MODEL_NAME", "gemini-3.1-flash-image")
+
 genai.configure(
-    api_key="sk-b5b6a796fe94489987b09ff932cfa7b4",
+    api_key=api_key,
     transport='rest',
-    client_options={'api_endpoint': 'http://127.0.0.1:8045'}
+    client_options={'api_endpoint': api_endpoint}
 )
 
-image_model = genai.GenerativeModel('gemini-3.1-flash-image')
+image_model = genai.GenerativeModel(model_name)
 
 app = FastAPI()
 
