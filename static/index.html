@@ -20,7 +20,6 @@
 </head>
 <body class="bg-gray-50 text-gray-800">
     <div id="app">
-        <!-- Login Screen -->
         <div v-if="!user" class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
             <div class="max-w-md w-full space-y-8 bg-white p-10 rounded-2xl shadow-xl border border-gray-100">
                 <div class="text-center">
@@ -28,7 +27,6 @@
                     <h2 class="text-3xl font-extrabold text-gray-900 tracking-tight">AI Creator</h2>
                     <p class="mt-2 text-sm text-gray-500">请使用配置文件分配的强密码登入</p>
                 </div>
-                <!-- Adding autocomplete attributes to prevent Chrome data leak warnings -->
                 <form class="mt-8 space-y-6" @submit.prevent="handleLogin">
                     <div class="rounded-md shadow-sm -space-y-px">
                         <div>
@@ -50,9 +48,7 @@
             </div>
         </div>
 
-        <!-- Main App Container -->
         <div v-else class="flex h-screen overflow-hidden">
-            <!-- Sidebar -->
             <div class="w-64 bg-white shadow-lg z-10 hidden md:flex flex-col border-r border-gray-100">
                 <div class="p-6">
                     <h1 class="text-2xl font-black text-indigo-600 flex items-center tracking-tight">
@@ -80,7 +76,6 @@
                 </div>
             </div>
 
-            <!-- Mobile Header -->
             <div class="md:hidden bg-white shadow p-4 flex justify-between items-center z-20">
                 <h1 class="text-xl font-bold text-indigo-600"><i class="fas fa-magic mr-2"></i>Creator</h1>
                 <div class="flex space-x-4">
@@ -93,7 +88,6 @@
             <main class="flex-1 overflow-y-auto bg-slate-50 relative custom-scrollbar">
                 <div class="p-6 lg:p-10 max-w-6xl mx-auto w-full">
                     
-                    <!-- Create Tab -->
                     <div v-show="currentTab === 'create'" class="space-y-6">
                         <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                             <div class="bg-indigo-600 px-6 py-6 md:px-8 text-white">
@@ -111,7 +105,20 @@
                                     </button>
                                 </div>
 
-                                <!-- Prompt Templates Section -->
+                                <div class="mb-6">
+                                    <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                        <i class="fas fa-microchip text-indigo-500 mr-1"></i>驱动引擎
+                                    </label>
+                                    <div class="flex flex-wrap gap-3 bg-gray-50 p-2 rounded-xl border border-gray-200 inline-flex">
+                                        <label v-for="m in availableModels" :key="m.id" 
+                                               :class="form.model_id === m.id ? 'bg-white shadow-sm border-indigo-200 text-indigo-700' : 'border-transparent text-gray-600 hover:bg-gray-200'" 
+                                               class="flex items-center px-5 py-2 border rounded-lg cursor-pointer transition-all">
+                                            <input type="radio" :value="m.id" v-model="form.model_id" class="hidden">
+                                            <span class="text-sm font-bold">{{ m.name }}</span>
+                                        </label>
+                                    </div>
+                                </div>
+
                                 <div class="mb-8">
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="block text-sm font-semibold text-gray-700">
@@ -129,11 +136,9 @@
                                     </div>
                                 </div>
 
-                                <!-- Multi-Image Upload Area (Drag & Drop) -->
                                 <div v-show="form.mode === 'i2i'" class="mb-8">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">多参考图片上传 <span class="text-xs font-normal text-gray-400 ml-1">(支持拖拽)</span></label>
                                     
-                                    <!-- Drag Zone -->
                                     <div 
                                         @dragover.prevent="isDragging = true" 
                                         @dragleave.prevent="isDragging = false" 
@@ -154,7 +159,6 @@
                                         <input id="file-upload" type="file" multiple class="hidden" @change="handleFileUpload" accept="image/*" ref="fileInput">
                                     </div>
 
-                                    <!-- Image Thumbnails Preview -->
                                     <div v-if="form.files.length > 0" class="mt-4 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100">
                                         <div class="flex justify-between items-center mb-3">
                                             <p class="text-sm text-gray-600 font-medium">已就绪 <span class="font-bold text-indigo-600 text-lg mx-1">{{ form.files.length }}</span> 张参考图：</p>
@@ -173,7 +177,6 @@
                                     </div>
                                 </div>
 
-                                <!-- Prompts Area -->
                                 <div class="mb-8">
                                     <label class="flex justify-between items-center text-sm font-semibold text-gray-700 mb-2">
                                         <span>创作提示词 <span class="text-xs font-normal text-gray-400 ml-1">(每行一个，将会并行批量处理)</span></span>
@@ -196,7 +199,6 @@
                         </div>
                     </div>
 
-                    <!-- Jobs Tab -->
                     <div v-show="currentTab === 'jobs'" class="space-y-6">
                         <div class="flex space-x-4 items-center mb-6">
                             <h2 class="text-2xl font-bold text-gray-800 flex-1">您的任务队列</h2>
@@ -232,7 +234,9 @@
                                         </span>
                                         {{ job.mode === 't2i' ? '文生图任务' : '图生图任务' }}
                                     </span>
-                                    <span class="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded ml-2 hidden sm:inline-block">#{{ job.id.substring(0,8) }}</span>
+                                    <span class="text-xs text-gray-500 ml-2" v-if="job.model_id">
+                                        [<i class="fas fa-microchip mr-1"></i>{{ job.model_id }}]
+                                    </span>
                                 </div>
                                 <div class="flex items-center space-x-4">
                                     <div class="text-sm text-gray-500 font-medium whitespace-nowrap"><i class="far fa-calendar-alt mr-1.5 opacity-70"></i>{{ formatDate(job.created_at) }}</div>
@@ -247,7 +251,6 @@
                                     <i class="fas fa-bookmark mr-2 text-indigo-400"></i>预设模板：<span class="font-bold ml-1">{{ job.template_name }}</span>
                                 </div>
 
-                                <!-- Progress Bar -->
                                 <div class="bg-gray-50 p-5 rounded-xl border border-gray-100">
                                     <div class="flex justify-between text-sm mb-3">
                                         <span class="font-bold text-gray-700">整体进度: <span class="bg-white px-2 py-0.5 rounded shadow-sm mx-1">{{ job.completed + job.failed }} / {{ job.total }}</span> 项</span>
@@ -263,13 +266,11 @@
                                     </div>
                                 </div>
                                 
-                                <!-- Results Grid -->
                                 <div v-if="job.results && job.results.length > 0" class="mt-8 border-t border-gray-100 pt-6">
                                     <h4 class="text-base font-bold text-gray-800 mb-5 flex items-center"><i class="fas fa-layer-group text-indigo-500 mr-2"></i>生成成果</h4>
                                     
                                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                         <div v-for="(res, idx) in job.results" :key="idx" class="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm transition-all relative flex flex-col hover:border-indigo-300 hover:shadow-md">
-                                            <!-- Output Header -->
                                             <div class="mb-3 border-b border-gray-50 pb-3">
                                                 <div class="text-sm font-bold text-gray-800 line-clamp-2 leading-relaxed tracking-wide">"{{ res.prompt }}"</div>
                                                 <div v-if="res.source_img" class="mt-2 text-xs text-gray-500 truncate bg-gray-50 px-2 py-1 rounded inline-block max-w-full">
@@ -278,15 +279,10 @@
                                             </div>
 
                                             <div class="flex-1 flex flex-col justify-end">
-                                                <!-- Case: Has structured images array -->
                                                 <div v-if="res.images && res.images.length > 0" class="grid grid-cols-2 gap-2">
                                                     <div v-for="img in res.images" class="relative group rounded-lg overflow-hidden bg-gray-100 shadow-sm aspect-square">
-                                                        <!-- Appending ?token= to pass auth properly for thumbnail preview -->
                                                         <img :src="img.url + '?token=' + getToken()" class="object-cover w-full h-full" />
-                                                        
-                                                        <!-- Hover Actions -->
                                                         <div class="absolute inset-0 bg-gray-900/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all duration-300 gap-3 backdrop-blur-[1px]">
-                                                            <!-- Download Action -->
                                                             <button @click.prevent="downloadImage(img.url, img.download_name)" class="w-10 h-10 rounded-full bg-indigo-600/80 hover:bg-indigo-600 text-white flex items-center justify-center transition-colors transform hover:scale-110 shadow-sm border border-indigo-400" title="直接下载">
                                                                 <i class="fas fa-download"></i>
                                                             </button>
@@ -297,10 +293,8 @@
                                                     </div>
                                                 </div>
 
-                                                <!-- Text Result fallback -->
                                                 <div v-if="res.status === 'success' && res.result && (!res.images || res.images.length === 0)" class="markdown-body text-sm bg-gray-50 p-3 rounded-lg flex-1 overflow-auto max-h-48" v-html="renderMarkdown(res.result)"></div>
                                                 
-                                                <!-- Error State -->
                                                 <div v-if="res.status === 'error'" class="text-sm text-red-600 bg-red-50 p-4 rounded-xl border border-red-100">
                                                     <div class="font-bold flex items-center mb-1"><i class="fas fa-exclamation-triangle mr-2"></i>生成失败</div>
                                                     <p class="text-xs opacity-80 break-words">{{ res.error }}</p>
@@ -316,7 +310,6 @@
             </main>
         </div>
 
-        <!-- Add Template Modal -->
         <div v-if="showSaveTemplateModal" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
             <div class="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 w-full max-w-lg transform transition-all">
                 <div class="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
@@ -347,7 +340,6 @@
 
     </div>
 
-    <!-- Tailwind Config for custom animations -->
     <script>
         tailwind.config = {
             theme: {
@@ -383,8 +375,10 @@
 
                 // App State
                 const currentTab = ref('create');
+                const availableModels = ref([]);
                 const form = ref({
                     mode: 't2i',
+                    model_id: 'gemini-3.1-flash-image', // 默认回退
                     prompts: '',
                     files: [],
                     selectedTemplate: ''
@@ -407,7 +401,6 @@
                     return form.value.prompts.split('\n').filter(p => p.trim()).length;
                 });
 
-                // Fetch wrapper to auto-inject Bearer token
                 const authFetch = async (url, options = {}) => {
                     const token = getToken();
                     if (!options.headers) options.headers = {};
@@ -476,6 +469,7 @@
                 };
 
                 const initializeUserSpace = () => {
+                    fetchModels();
                     fetchTemplates();
                     fetchJobs();
                     if (!pollInterval) {
@@ -487,7 +481,18 @@
                     }
                 };
 
-                // Templates Logic
+                const fetchModels = async () => {
+                    try {
+                        const res = await authFetch('/api/models');
+                        if (res.ok) {
+                            availableModels.value = await res.json();
+                            if (availableModels.value.length > 0 && !availableModels.value.find(m => m.id === form.value.model_id)) {
+                                form.value.model_id = availableModels.value[0].id;
+                            }
+                        }
+                    } catch (e) { console.error("Failed to load models"); }
+                };
+
                 const fetchTemplates = async () => {
                     try {
                         const res = await authFetch('/api/templates');
@@ -524,7 +529,6 @@
                     } catch (e) { alert("保存失败"); }
                 };
 
-                // File Upload Logic
                 const triggerFileInput = () => { if (fileInput.value) fileInput.value.click(); };
                 const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
@@ -570,7 +574,6 @@
                     return objectUrls.value[file.name];
                 };
 
-                // Job Submission
                 const submitJob = async () => {
                     if (!form.value.prompts.trim()) return;
                     if (form.value.mode === 'i2i' && form.value.files.length === 0) {
@@ -581,6 +584,7 @@
                     const formData = new FormData();
                     formData.append('prompts', form.value.prompts);
                     formData.append('mode', form.value.mode);
+                    formData.append('model_id', form.value.model_id);
                     formData.append('template_name', form.value.selectedTemplate);
                     
                     if (form.value.mode === 'i2i') {
@@ -643,7 +647,6 @@
                     }
                 };
 
-                // Utility / Actions
                 const formatDate = (timestamp) => {
                     if (!timestamp) return '';
                     const date = new Date(timestamp * 1000);
@@ -655,7 +658,6 @@
                     return marked.parse(text);
                 };
 
-                // Download Logic
                 const downloadImage = async (url, filename) => {
                     try {
                         const token = getToken();
@@ -697,6 +699,7 @@
                     isLoggingIn,
                     loginForm,
                     currentTab,
+                    availableModels,
                     form,
                     templates,
                     showSaveTemplateModal,

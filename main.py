@@ -5,6 +5,9 @@ import os
 import re
 import base64
 import json
+import requests
+import dashscope
+from dashscope import MultiModalConversation
 from dotenv import load_dotenv
 from typing import List, Optional
 
@@ -17,7 +20,9 @@ import google.generativeai as genai
 import PIL.Image
 from datetime import datetime
 
-# Setup Config using JSON
+# ================= 配置与初始化 =================
+
+# 1. 基础应用配置
 config_file = "config.json"
 example_file = "config_example.json"
 
@@ -26,17 +31,16 @@ if not os.path.exists(example_file):
         json.dump({
             "users": {
                 "admin": "admin_secure_pass_2026",
-                "nala": "nala_secure_pass_123"
+                "test": "123456"
             }
         }, f, indent=4)
 
 if not os.path.exists(config_file):
-    # Create default config.json if not present
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump({
             "users": {
                 "admin": "123456",
-                "nala": "123456"
+                "test": "123456"
             }
         }, f, indent=4)
 
@@ -44,10 +48,10 @@ with open(config_file, "r", encoding="utf-8") as f:
     config = json.load(f)
 
 USERS = config.get("users", {})
-
 SESSIONS = {}
 
-# Init SDK
+# 2. AI 模型客户端初始化
+# 2.1 Gemini 初始化
 api_key = os.getenv("GENAI_API_KEY", "")
 api_endpoint = os.getenv("GENAI_API_ENDPOINT", "http://127.0.0.1:8045")
 model_name = os.getenv("GENAI_MODEL_NAME", "gemini-3.1-flash-image")
@@ -57,8 +61,20 @@ genai.configure(
     transport='rest',
     client_options={'api_endpoint': api_endpoint}
 )
-
 image_model = genai.GenerativeModel(model_name)
+
+# 2.2 阿里云 DashScope (通义千问) 初始化
+dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
+# 明确指定北京地域节点（与官方文档一致）
+dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
+
+# 3. 注册可用模型引擎
+AVAILABLE_MODELS = [
+    {"id": "gemini-3.1-flash-image", "name": "Gemini 3.1 Flash Image"},
+    {"id": "qwen-image-2.0-pro", "name": "通义千问 Image 2.0 Pro"}
+]
+
+# ================= FastAPI 应用设置 =================
 
 app = FastAPI()
 
@@ -73,12 +89,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), query_token: str = Que
         raise HTTPException(status_code=401, detail="Unauthorized")
     return SESSIONS[actual_token]
 
+# ================= 任务队列系统 =================
+
 class JobQueue:
     def __init__(self):
         self.jobs = {}
         self.queue = asyncio.Queue()
 
-    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", template_content=""):
+    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", template_content="", model_id="gemini-3.1-flash-image"):
         job_id = str(uuid.uuid4())
         
         total_tasks = len(prompts)
@@ -89,6 +107,7 @@ class JobQueue:
             "id": job_id,
             "user": user,
             "mode": mode,
+            "model_id": model_id,
             "status": "queued",
             "total": total_tasks,
             "completed": 0,
@@ -99,14 +118,14 @@ class JobQueue:
             "eta": None,
             "template_name": template_name
         }
-        await self.queue.put((job_id, user, prompts, source_image_paths, template_name, template_content))
+        await self.queue.put((job_id, user, prompts, source_image_paths, template_name, template_content, model_id))
         return self.jobs[job_id]
 
 job_queue = JobQueue()
 
 async def process_queue():
     while True:
-        job_id, user, prompts, source_image_paths, tpl_name, tpl_content = await job_queue.queue.get()
+        job_id, user, prompts, source_image_paths, tpl_name, tpl_content, model_id = await job_queue.queue.get()
         job = job_queue.jobs[job_id]
         job["status"] = "processing"
         job["started_at"] = time.time()
@@ -129,23 +148,6 @@ async def process_queue():
         for i, (prompt, img_path) in enumerate(tasks):
             start_time = time.time()
             try:
-                contents = []
-                
-                # Content includes prompts directly since UI template syncs to textbox
-                if img_path and os.path.exists(img_path):
-                    try:
-                        img = PIL.Image.open(img_path)
-                        enhanced_prompt = f"Reference image attached. Instruction: {prompt}"
-                        contents.append(img)
-                        contents.append(enhanced_prompt)
-                    except Exception as e:
-                        print(f"Error loading image {img_path}: {e}")
-                        contents.append(prompt)
-                else:
-                    contents.append(prompt)
-                
-                response = await asyncio.to_thread(image_model.generate_content, contents)
-                
                 generated_images = []
                 final_text = ""
                 
@@ -158,53 +160,128 @@ async def process_queue():
                 dl_base_name = f"{base_src}_{tpl_name}_{ts}" if tpl_name else f"{base_src}_{ts}"
                 dl_base_name = re.sub(r'[\\/*?:"<>|]', "", dl_base_name)
 
-                if hasattr(response, 'candidates') and response.candidates:
-                    for candidate in response.candidates:
-                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                            for part in candidate.content.parts:
-                                if hasattr(part, 'inline_data') and part.inline_data:
-                                    data = base64.b64decode(part.inline_data.data) if isinstance(part.inline_data.data, str) else part.inline_data.data
-                                    mime = part.inline_data.mime_type
-                                    ext = mime.split('/')[-1] if mime else 'png'
-                                    if ext == 'jpeg': ext = 'jpg'
-                                    
-                                    filename = f"gen_{uuid.uuid4().hex[:8]}.{ext}"
-                                    dl_full_name = f"{dl_base_name}.{ext}"
-                                    filepath = os.path.join(user_dir, filename)
-                                    with open(filepath, "wb") as f:
-                                        f.write(data)
-                                    generated_images.append({
-                                        "url": f"/api/images/{user}/{filename}",
-                                        "download_name": dl_full_name
-                                    })
+                # ================= AI 模型路由分发 =================
+                
+                if model_id == "qwen-image-2.0-pro":
+                    # 根据官方文档，使用 MultiModalConversation 统一处理文生图与图生图
+                    content_list = []
+                    
+                    # 如果有图生图的底图，转成 Base64 附加
+                    if img_path and os.path.exists(img_path):
+                        try:
+                            with open(img_path, "rb") as f:
+                                b64_data = base64.b64encode(f.read()).decode('utf-8')
+                            ext = os.path.splitext(img_path)[1].lower().replace('.', '')
+                            if ext == 'jpg': ext = 'jpeg'
+                            mime = f"image/{ext}" if ext else "image/jpeg"
+                            content_list.append({"image": f"data:{mime};base64,{b64_data}"})
+                        except Exception as e:
+                            print(f"Error encoding image for Qwen: {e}")
+                            
+                    # 附加文本提示词
+                    content_list.append({"text": prompt})
 
-                if not generated_images:
-                    try:
-                        text = response.text
-                        if text:
-                            base64_patterns = re.findall(r'!\[.*?\]\((data:image/([^;]+);base64,([^)]+))\)', text)
-                            if base64_patterns:
-                                idx_img = 1
-                                for full_data_uri, ext, b64_data in base64_patterns:
-                                    if ext == 'jpeg': ext = 'jpg'
-                                    filename = f"gen_{uuid.uuid4().hex[:8]}.{ext}"
-                                    suffix = f"_{idx_img}" if idx_img > 1 else ""
-                                    dl_full_name = f"{dl_base_name}{suffix}.{ext}"
-                                    idx_img += 1
-                                    
-                                    filepath = os.path.join(user_dir, filename)
-                                    with open(filepath, "wb") as f:
-                                        f.write(base64.b64decode(b64_data))
-                                    generated_images.append({
-                                        "url": f"/api/images/{user}/{filename}",
-                                        "download_name": dl_full_name
-                                    })
+                    messages = [{
+                        "role": "user",
+                        "content": content_list
+                    }]
+
+                    kwargs = {
+                        "model": "qwen-image-2.0-pro",
+                        "messages": messages,
+                        "n": 1,
+                        "size": "1024*1024",
+                        "prompt_extend": True,
+                        "watermark": False
+                    }
+                    
+                    # 调用多模态同步接口
+                    rsp = await asyncio.to_thread(MultiModalConversation.call, **kwargs)
+                    
+                    if rsp.status_code == 200:
+                        content_res = rsp.output.choices[0].message.content
+                        for item in content_res:
+                            if 'image' in item:
+                                img_url = item['image']
+                                img_data = await asyncio.to_thread(requests.get, img_url)
+                                filename = f"gen_{uuid.uuid4().hex[:8]}.png"
+                                filepath = os.path.join(user_dir, filename)
                                 
-                                final_text = re.sub(r'!\[.*?\]\((data:image/[^;]+;base64,[^)]+)\)', '', text)
-                            else:
-                                final_text = text
-                    except Exception:
-                        pass
+                                with open(filepath, "wb") as f:
+                                    f.write(img_data.content)
+                                    
+                                generated_images.append({
+                                    "url": f"/api/images/{user}/{filename}",
+                                    "download_name": f"{dl_base_name}.png"
+                                })
+                    else:
+                        raise Exception(f"DashScope Error: {rsp.message} (Code: {rsp.code})")
+
+                else:
+                    # Gemini 引擎调用 (默认)
+                    contents = []
+                    if img_path and os.path.exists(img_path):
+                        try:
+                            img = PIL.Image.open(img_path)
+                            enhanced_prompt = f"Reference image attached. Instruction: {prompt}"
+                            contents.append(img)
+                            contents.append(enhanced_prompt)
+                        except Exception as e:
+                            print(f"Error loading image {img_path}: {e}")
+                            contents.append(prompt)
+                    else:
+                        contents.append(prompt)
+                    
+                    response = await asyncio.to_thread(image_model.generate_content, contents)
+
+                    if hasattr(response, 'candidates') and response.candidates:
+                        for candidate in response.candidates:
+                            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                                for part in candidate.content.parts:
+                                    if hasattr(part, 'inline_data') and part.inline_data:
+                                        data = base64.b64decode(part.inline_data.data) if isinstance(part.inline_data.data, str) else part.inline_data.data
+                                        mime = part.inline_data.mime_type
+                                        ext = mime.split('/')[-1] if mime else 'png'
+                                        if ext == 'jpeg': ext = 'jpg'
+                                        
+                                        filename = f"gen_{uuid.uuid4().hex[:8]}.{ext}"
+                                        dl_full_name = f"{dl_base_name}.{ext}"
+                                        filepath = os.path.join(user_dir, filename)
+                                        with open(filepath, "wb") as f:
+                                            f.write(data)
+                                        generated_images.append({
+                                            "url": f"/api/images/{user}/{filename}",
+                                            "download_name": dl_full_name
+                                        })
+
+                    if not generated_images:
+                        try:
+                            text = response.text
+                            if text:
+                                base64_patterns = re.findall(r'!\[.*?\]\((data:image/([^;]+);base64,([^)]+))\)', text)
+                                if base64_patterns:
+                                    idx_img = 1
+                                    for full_data_uri, ext, b64_data in base64_patterns:
+                                        if ext == 'jpeg': ext = 'jpg'
+                                        filename = f"gen_{uuid.uuid4().hex[:8]}.{ext}"
+                                        suffix = f"_{idx_img}" if idx_img > 1 else ""
+                                        dl_full_name = f"{dl_base_name}{suffix}.{ext}"
+                                        idx_img += 1
+                                        
+                                        filepath = os.path.join(user_dir, filename)
+                                        with open(filepath, "wb") as f:
+                                            f.write(base64.b64decode(b64_data))
+                                        generated_images.append({
+                                            "url": f"/api/images/{user}/{filename}",
+                                            "download_name": dl_full_name
+                                        })
+                                    final_text = re.sub(r'!\[.*?\]\((data:image/[^;]+;base64,[^)]+)\)', '', text)
+                                else:
+                                    final_text = text
+                        except Exception:
+                            pass
+                
+                # ==================================================
                         
                 job["results"].append({
                     "prompt": prompt, 
@@ -238,6 +315,8 @@ async def process_queue():
 async def startup_event():
     asyncio.create_task(process_queue())
 
+# ================= API 路由 =================
+
 @app.post("/api/login")
 def login(username: str = Form(...), password: str = Form(...)):
     if USERS.get(username) == password:
@@ -256,6 +335,10 @@ def logout(token: str = Depends(oauth2_scheme)):
     if token in SESSIONS:
         del SESSIONS[token]
     return {"success": True}
+
+@app.get("/api/models")
+def get_models(user: str = Depends(get_current_user)):
+    return AVAILABLE_MODELS
 
 @app.get("/api/templates")
 def get_templates(user: str = Depends(get_current_user)):
@@ -281,6 +364,7 @@ async def create_job(
     prompts: str = Form(...),
     mode: str = Form(...),
     template_name: str = Form(""),
+    model_id: str = Form("gemini-3.1-flash-image"),
     images: Optional[List[UploadFile]] = File(None),
     user: str = Depends(get_current_user)
 ):
@@ -299,7 +383,7 @@ async def create_job(
                     f.write(await img.read())
                 source_image_paths.append(path)
             
-    job = await job_queue.add_job(user, mode, prompt_list, source_image_paths, template_name, "")
+    job = await job_queue.add_job(user, mode, prompt_list, source_image_paths, template_name, "", model_id)
     return job
 
 @app.get("/api/jobs")
