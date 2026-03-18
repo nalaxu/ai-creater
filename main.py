@@ -96,7 +96,7 @@ class JobQueue:
         self.jobs = {}
         self.queue = asyncio.Queue()
 
-    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", template_content="", model_id="gemini-3.1-flash-image"):
+    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", template_content="", model_id="gemini-3.1-flash-image", negative_prompt=""):
         job_id = str(uuid.uuid4())
         
         total_tasks = len(prompts)
@@ -116,16 +116,17 @@ class JobQueue:
             "created_at": time.time(),
             "started_at": None,
             "eta": None,
-            "template_name": template_name
+            "template_name": template_name,
+            "negative_prompt": negative_prompt
         }
-        await self.queue.put((job_id, user, prompts, source_image_paths, template_name, template_content, model_id))
+        await self.queue.put((job_id, user, prompts, source_image_paths, template_name, template_content, model_id, negative_prompt))
         return self.jobs[job_id]
 
 job_queue = JobQueue()
 
 async def process_queue():
     while True:
-        job_id, user, prompts, source_image_paths, tpl_name, tpl_content, model_id = await job_queue.queue.get()
+        job_id, user, prompts, source_image_paths, tpl_name, tpl_content, model_id, negative_prompt = await job_queue.queue.get()
         job = job_queue.jobs[job_id]
         job["status"] = "processing"
         job["started_at"] = time.time()
@@ -163,10 +164,8 @@ async def process_queue():
                 # ================= AI 模型路由分发 =================
                 
                 if model_id == "qwen-image-2.0-pro":
-                    # 根据官方文档，使用 MultiModalConversation 统一处理文生图与图生图
                     content_list = []
                     
-                    # 如果有图生图的底图，转成 Base64 附加
                     if img_path and os.path.exists(img_path):
                         try:
                             with open(img_path, "rb") as f:
@@ -178,7 +177,6 @@ async def process_queue():
                         except Exception as e:
                             print(f"Error encoding image for Qwen: {e}")
                             
-                    # 附加文本提示词
                     content_list.append({"text": prompt})
 
                     messages = [{
@@ -194,8 +192,9 @@ async def process_queue():
                         "prompt_extend": True,
                         "watermark": False
                     }
+                    if negative_prompt:
+                        kwargs["negative_prompt"] = negative_prompt
                     
-                    # 调用多模态同步接口
                     rsp = await asyncio.to_thread(MultiModalConversation.call, **kwargs)
                     
                     if rsp.status_code == 200:
@@ -218,19 +217,23 @@ async def process_queue():
                         raise Exception(f"DashScope Error: {rsp.message} (Code: {rsp.code})")
 
                 else:
-                    # Gemini 引擎调用 (默认)
+                    # Gemini 引擎处理反向提示词和调用
+                    final_prompt_text = prompt
+                    if negative_prompt:
+                        final_prompt_text = f"{prompt}\n\nNegative Constraints (DO NOT INCLUDE): {negative_prompt}"
+
                     contents = []
                     if img_path and os.path.exists(img_path):
                         try:
                             img = PIL.Image.open(img_path)
-                            enhanced_prompt = f"Reference image attached. Instruction: {prompt}"
+                            enhanced_prompt = f"Reference image attached. Instruction: {final_prompt_text}"
                             contents.append(img)
                             contents.append(enhanced_prompt)
                         except Exception as e:
                             print(f"Error loading image {img_path}: {e}")
-                            contents.append(prompt)
+                            contents.append(final_prompt_text)
                     else:
-                        contents.append(prompt)
+                        contents.append(final_prompt_text)
                     
                     response = await asyncio.to_thread(image_model.generate_content, contents)
 
@@ -362,6 +365,7 @@ async def save_templates(request: Request, user: str = Depends(get_current_user)
 @app.post("/api/jobs")
 async def create_job(
     prompts: str = Form(...),
+    negative_prompt: str = Form(""),
     mode: str = Form(...),
     template_name: str = Form(""),
     model_id: str = Form("gemini-3.1-flash-image"),
@@ -383,7 +387,7 @@ async def create_job(
                     f.write(await img.read())
                 source_image_paths.append(path)
             
-    job = await job_queue.add_job(user, mode, prompt_list, source_image_paths, template_name, "", model_id)
+    job = await job_queue.add_job(user, mode, prompt_list, source_image_paths, template_name, "", model_id, negative_prompt)
     return job
 
 @app.get("/api/jobs")
