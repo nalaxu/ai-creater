@@ -322,7 +322,7 @@ async def process_queue():
         
         tasks = []
         for _ in range(batch_size):
-            if job["mode"] in ['i2i', 'fission'] and source_image_paths:
+            if job["mode"] in ['i2i', 'fission', 'convert'] and source_image_paths: # convert 模式也需要按图循环
                 tasks.extend([(p, img_path) for img_path in source_image_paths for p in prompts])
             else:
                 tasks.extend([(p, None) for p in prompts])
@@ -418,11 +418,17 @@ async def create_job(
     images: Optional[List[UploadFile]] = File(None), curr: dict = Depends(get_current_user)
 ):
     user, prompt_str = curr["username"], prompts.strip()
-    if mode == "fission" and not prompt_str: prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
-    elif not prompt_str: return {"error": "No prompt provided"}
+    
+    # --- 关键逻辑变更 ---
+    if mode == "fission" and not prompt_str: 
+        prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
+    elif mode == "convert" and not prompt_str:
+        prompt_str = "保持原图主体和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
+    elif not prompt_str: 
+        return {"error": "No prompt provided"}
     
     source_paths = []
-    if mode in ["i2i", "fission"] and images:
+    if mode in ["i2i", "fission", "convert"] and images:
         os.makedirs(f"users/{user}/outputs", exist_ok=True)
         for img in images:
             if img and getattr(img, "filename", None):

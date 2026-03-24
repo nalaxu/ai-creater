@@ -397,10 +397,10 @@
                                     <div class="h-4 w-px bg-gray-300"></div>
                                     <span class="text-sm font-bold text-gray-700 flex items-center">
                                         <span class="bg-white p-1 rounded inline-flex shadow-sm mr-2">
-                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : 'fas fa-sitemap text-emerald-500'"
+                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : 'fas fa-sitemap text-emerald-500'"
                                                 class="w-4 text-center"></i>
                                         </span>
-                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : '图片裂变任务' }}
+                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode === 'convert' ? 'AI尺寸重绘' : '图片裂变任务' }}
                                     </span>
                                     <span class="text-xs text-gray-500 ml-2" v-if="job.model_id">
                                         [<i class="fas fa-microchip mr-1"></i>{{ job.model_id }}]
@@ -891,9 +891,6 @@
 
                     isSubmitting.value = true;
                     const formData = new FormData();
-                    
-                    // 将 convert 模式包装成后端的 i2i 任务
-                    const backendMode = form.value.mode === 'convert' ? 'i2i' : form.value.mode;
 
                     let finalPrompt = form.value.prompts.trim();
                     if (form.value.mode === 'convert' && !finalPrompt) {
@@ -902,7 +899,8 @@
 
                     formData.append('prompts', finalPrompt);
                     formData.append('negative_prompt', form.value.negative_prompt);
-                    formData.append('mode', backendMode);
+                    // --- 核心修正：不再伪装成 i2i，直接把 convert 传给后端 ---
+                    formData.append('mode', form.value.mode);
                     formData.append('model_id', form.value.model_id);
                     formData.append('batch_size', form.value.mode === 'fission' ? form.value.batch_size : 1);
                     formData.append('target_ratio', form.value.target_ratio);
