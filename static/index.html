@@ -127,8 +127,10 @@
             <div class="md:hidden bg-white shadow p-4 flex justify-between items-center z-20">
                 <h1 class="text-xl font-bold text-indigo-600"><i class="fas fa-magic mr-2"></i>Creator</h1>
                 <div class="flex space-x-4">
-                    <button @click="currentTab='create'" :class="{'text-indigo-600': currentTab=='create'}"><i
+                    <button @click="currentTab='create'; form.mode='t2i'" :class="{'text-indigo-600': currentTab=='create' && form.mode !== 'video'}"><i
                             class="fas fa-plus-circle text-xl"></i></button>
+                    <button @click="currentTab='create'; form.mode='video'" :class="{'text-rose-600': currentTab=='create' && form.mode === 'video'}"><i
+                            class="fas fa-film text-xl"></i></button>
                     <button @click="currentTab='jobs'" :class="{'text-indigo-600': currentTab=='jobs'}"><i
                             class="fas fa-tasks text-xl"></i></button>
                     <button @click="handleLogout" class="text-red-500"><i
@@ -168,36 +170,103 @@
                                         class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
                                         <i class="fas fa-crop-alt mr-2"></i>AI 尺寸重绘
                                     </button>
+                                    <button @click="form.mode = 'video'"
+                                        :class="form.mode === 'video' ? 'bg-white text-rose-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'"
+                                        class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
+                                        <i class="fas fa-film mr-2"></i>视频生成
+                                    </button>
                                 </div>
 
                                 <div class="mb-6">
                                     <label class="block text-sm font-semibold text-gray-700 mb-4">
                                         <i class="fas fa-microchip text-indigo-500 mr-1"></i>驱动引擎配置
+                                        <span v-if="form.mode === 'video'" class="text-xs font-normal text-rose-500 ml-1">(仅展示视频模型)</span>
+                                        <span v-else class="text-xs font-normal text-gray-400 ml-1">(仅展示图像模型)</span>
                                     </label>
 
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div v-for="group in availableModels" :key="group.provider"
-                                            class="bg-gray-50/70 p-4 rounded-xl border border-gray-100">
-                                            <h4
-                                                class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center">
-                                                <i class="fas fa-server mr-2 opacity-60"></i>{{ group.provider }}
-                                            </h4>
-                                            <div class="flex flex-wrap gap-2">
-                                                <label v-for="m in group.models" :key="m.id"
-                                                    :class="form.model_id === m.id ? 'bg-indigo-600 shadow-md border-indigo-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'"
-                                                    class="flex items-center px-4 py-2 border rounded-lg cursor-pointer transition-all">
-                                                    <input type="radio" :value="m.id" v-model="form.model_id"
-                                                        class="hidden">
-                                                    <span class="text-xs font-bold">{{ m.name }}</span>
-                                                </label>
+                                        <template v-for="group in availableModels" :key="group.provider">
+                                            <div v-if="filteredModels(group).length > 0"
+                                                class="bg-gray-50/70 p-4 rounded-xl border border-gray-100">
+                                                <h4
+                                                    class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center">
+                                                    <i class="fas fa-server mr-2 opacity-60"></i>{{ group.provider }}
+                                                </h4>
+                                                <div class="flex flex-wrap gap-2">
+                                                    <label v-for="m in filteredModels(group)" :key="m.id"
+                                                        :class="form.model_id === m.id ? (form.mode === 'video' ? 'bg-rose-600 shadow-md border-rose-600 text-white' : 'bg-indigo-600 shadow-md border-indigo-600 text-white') : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'"
+                                                        class="flex items-center px-4 py-2 border rounded-lg cursor-pointer transition-all">
+                                                        <input type="radio" :value="m.id" v-model="form.model_id"
+                                                            class="hidden">
+                                                        <span class="text-xs font-bold">{{ m.name }}</span>
+                                                    </label>
+                                                </div>
                                             </div>
-                                        </div>
+                                        </template>
                                     </div>
                                     <p class="text-[11px] text-gray-400 mt-2"><i
                                             class="fas fa-info-circle mr-1"></i>模型列表可在后端的 .env 配置文件中自由增减。</p>
                                 </div>
 
-                                <div class="mb-6">
+                                <!-- 视频生成参数 -->
+                                <div v-show="form.mode === 'video'" class="mb-6 bg-rose-50 border border-rose-100 p-5 rounded-xl space-y-4">
+                                    <h4 class="text-sm font-bold text-rose-700 flex items-center">
+                                        <i class="fas fa-sliders-h mr-2"></i>视频参数配置
+                                    </h4>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-semibold text-gray-600 mb-1">分辨率</label>
+                                            <select v-model="form.videoParams.size" class="w-full text-sm border border-gray-200 rounded-lg bg-white px-3 py-2 focus:ring-rose-500 focus:border-rose-500 outline-none">
+                                                <optgroup label="720P">
+                                                    <option value="1280*720">1280×720（16:9 横向）</option>
+                                                    <option value="720*1280">720×1280（9:16 竖向）</option>
+                                                    <option value="960*960">960×960（1:1 正方形）</option>
+                                                    <option value="1088*832">1088×832（4:3）</option>
+                                                    <option value="832*1088">832×1088（3:4）</option>
+                                                </optgroup>
+                                                <optgroup label="1080P">
+                                                    <option value="1920*1080">1920×1080（16:9 横向）</option>
+                                                    <option value="1080*1920">1080×1920（9:16 竖向）</option>
+                                                    <option value="1440*1440">1440×1440（1:1）</option>
+                                                    <option value="1632*1248">1632×1248（4:3）</option>
+                                                    <option value="1248*1632">1248×1632（3:4）</option>
+                                                </optgroup>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-semibold text-gray-600 mb-1">时长（秒）：<span class="text-rose-600 font-bold">{{ form.videoParams.duration }}s</span></label>
+                                            <input type="range" v-model.number="form.videoParams.duration" min="2" max="10" step="1"
+                                                class="w-full h-2 bg-rose-200 rounded-lg appearance-none cursor-pointer mt-2">
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-semibold text-gray-600 mb-1">镜头类型</label>
+                                            <div class="flex gap-2">
+                                                <button @click="form.videoParams.shot_type = 'single'"
+                                                    :class="form.videoParams.shot_type === 'single' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'"
+                                                    class="flex-1 text-xs font-semibold py-2 px-3 border rounded-lg transition-all">单镜头</button>
+                                                <button @click="form.videoParams.shot_type = 'multi'"
+                                                    :class="form.videoParams.shot_type === 'multi' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'"
+                                                    class="flex-1 text-xs font-semibold py-2 px-3 border rounded-lg transition-all">多镜头</button>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-end gap-3">
+                                            <label class="flex items-center gap-2 cursor-pointer select-none">
+                                                <input type="checkbox" v-model="form.videoParams.audio" class="w-4 h-4 accent-rose-600 rounded">
+                                                <span class="text-xs font-semibold text-gray-600">有声视频 <span class="text-gray-400 font-normal">(Flash模型)</span></span>
+                                            </label>
+                                        </div>
+                                        <div class="flex items-end gap-3">
+                                            <label class="flex items-center gap-2 cursor-pointer select-none">
+                                                <input type="checkbox" v-model="form.videoParams.watermark" class="w-4 h-4 accent-rose-600 rounded">
+                                                <span class="text-xs font-semibold text-gray-600">添加水印</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-6" v-show="form.mode !== 'video'">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         <i class="fas fa-crop-alt text-indigo-500 mr-1"></i>目标图片比例
                                         <span v-if="form.mode === 'convert'"
@@ -223,7 +292,7 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video'">
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="block text-sm font-semibold text-gray-700">
                                             <i class="fas fa-bookmark text-indigo-500 mr-1"></i>快捷加载提示模板 <span
@@ -258,48 +327,61 @@
                                     </div>
                                 </div>
 
-                                <div v-show="['i2i', 'fission', 'convert'].includes(form.mode)" class="mb-8">
+                                <div v-show="['i2i', 'fission', 'convert', 'video'].includes(form.mode)" class="mb-8">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                        {{ form.mode === 'convert' ? '上传需要重绘比例的图片' : '参考图片上传' }}
-                                        <span class="text-xs font-normal text-gray-400 ml-1"
-                                            v-if="form.mode !== 'convert'">(图生图每张独立生成，裂变模式单图扩增多张)</span>
+                                        <span v-if="form.mode === 'convert'">上传需要重绘比例的图片</span>
+                                        <span v-else-if="form.mode === 'video'">参考素材上传 <span class="text-xs font-normal text-rose-500 ml-1">(可选，最多 5 个文件，图片 ≤ 5 张，视频 ≤ 3 段)</span></span>
+                                        <span v-else>参考图片上传 <span class="text-xs font-normal text-gray-400 ml-1">(图生图每张独立生成，裂变模式单图扩增多张)</span></span>
                                     </label>
                                     <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
                                         @drop.prevent="onDrop"
-                                        :class="{'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging, 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging}"
+                                        :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging}"
                                         class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[200px]"
                                         @click="triggerFileInput">
                                         <div class="space-y-3 text-center pointer-events-none">
                                             <div class="bg-white p-4 rounded-full shadow-sm inline-block">
-                                                <i class="fas fa-cloud-upload-alt text-3xl text-indigo-500"></i>
+                                                <i :class="form.mode === 'video' ? 'fas fa-photo-video text-rose-500' : 'fas fa-cloud-upload-alt text-indigo-500'" class="text-3xl"></i>
                                             </div>
                                             <div class="text-base text-gray-700 font-medium">
-                                                <span class="text-indigo-600">点击上传</span> 或拖拽图片到此区域
+                                                <span :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'">点击上传</span> 或拖拽文件到此区域
                                             </div>
-                                            <p class="text-xs text-gray-400">支持批量选中 JPG / PNG / WEBP 格式图片</p>
+                                            <p class="text-xs text-gray-400" v-if="form.mode === 'video'">支持图片（JPG / PNG / WEBP / BMP）和视频（MP4 / MOV）</p>
+                                            <p class="text-xs text-gray-400" v-else>支持批量选中 JPG / PNG / WEBP 格式图片</p>
                                         </div>
                                         <input id="file-upload" type="file" multiple class="hidden"
-                                            @change="handleFileUpload" accept="image/*" ref="fileInput">
+                                            @change="handleFileUpload"
+                                            :accept="form.mode === 'video' ? 'image/jpeg,image/png,image/webp,image/bmp,video/mp4,video/quicktime' : 'image/*'"
+                                            ref="fileInput">
                                     </div>
                                     <div v-if="form.files.length > 0"
-                                        class="mt-4 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100">
+                                        :class="form.mode === 'video' ? 'bg-rose-50/50 border-rose-100' : 'bg-indigo-50/50 border-indigo-100'"
+                                        class="mt-4 p-4 rounded-xl border">
                                         <div class="flex justify-between items-center mb-3">
                                             <p class="text-sm text-gray-600 font-medium">已就绪 <span
-                                                    class="font-bold text-indigo-600 text-lg mx-1">{{ form.files.length
-                                                    }}</span> 张图片：</p>
+                                                    :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'"
+                                                    class="font-bold text-lg mx-1">{{ form.files.length }}</span> 个文件：</p>
                                             <button @click="removeAllFiles"
                                                 class="text-xs text-red-500 hover:text-red-700 px-2 py-1 bg-red-50 rounded hidden sm:block">清空全部</button>
                                         </div>
                                         <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
                                             <div v-for="(f, i) in form.files" :key="i"
-                                                class="relative group rounded-lg overflow-hidden border border-indigo-200 shadow-sm aspect-square bg-white flex items-center justify-center">
-                                                <img :src="getObjectURL(f)"
-                                                    class="w-full h-full object-cover group-hover:blur-[2px] transition-all">
+                                                :class="form.mode === 'video' ? 'border-rose-200' : 'border-indigo-200'"
+                                                class="relative group rounded-lg overflow-hidden border shadow-sm aspect-square bg-white flex items-center justify-center">
+                                                <template v-if="isVideoFile(f)">
+                                                    <div class="w-full h-full flex flex-col items-center justify-center bg-gray-800 text-white">
+                                                        <i class="fas fa-film text-2xl mb-1 text-rose-400"></i>
+                                                        <span class="text-[10px] text-gray-300 text-center px-1 leading-tight truncate w-full text-center">{{ f.name }}</span>
+                                                    </div>
+                                                </template>
+                                                <template v-else>
+                                                    <img :src="getObjectURL(f)"
+                                                        class="w-full h-full object-cover group-hover:blur-[2px] transition-all">
+                                                </template>
                                                 <div
                                                     class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                                     <button @click.stop="removeFile(i)"
                                                         class="bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-red-600 transform scale-75 group-hover:scale-100 transition-transform shadow-lg"
-                                                        title="移除图片">
+                                                        title="移除文件">
                                                         <i class="fas fa-trash-alt text-sm"></i>
                                                     </button>
                                                 </div>
@@ -322,15 +404,21 @@
                                 <div class="mb-8" v-show="form.mode !== 'convert'">
                                     <label
                                         class="flex justify-between items-center text-sm font-semibold text-gray-700 mb-2">
-                                        <span>创作提示词 <span class="text-xs font-normal text-gray-400 ml-1">(正向
-                                                Prompt<span v-if="form.mode==='fission'">，裂变模式下选填</span>)</span></span>
+                                        <span>
+                                            <span v-if="form.mode === 'video'">视频描述提示词 <span class="text-xs font-bold text-red-500 ml-1">(必填)</span></span>
+                                            <span v-else>创作提示词 <span class="text-xs font-normal text-gray-400 ml-1">(正向 Prompt<span v-if="form.mode==='fission'">，裂变模式下选填</span>)</span></span>
+                                        </span>
                                     </label>
                                     <textarea v-model="form.prompts" rows="6"
-                                        class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-xl p-4 bg-gray-50 text-gray-800 transition-colors"
-                                        placeholder="例如：一只戴着墨镜的赛博朋克猫咪，背景是未来感十足的高楼大厦，画面需要有强烈的霓虹灯光效，使用水彩画风格呈现细节。"></textarea>
+                                        :class="form.mode === 'video' ? 'focus:ring-rose-500 focus:border-rose-500' : 'focus:ring-indigo-500 focus:border-indigo-500'"
+                                        class="shadow-sm block w-full sm:text-sm border-gray-300 rounded-xl p-4 bg-gray-50 text-gray-800 transition-colors"
+                                        :placeholder="form.mode === 'video' ? '例如：character1 站在窗边，微笑着望向远处，阳光洒在她的脸上。（用 character1、character2... 引用上传的参考角色）' : '例如：一只戴着墨镜的赛博朋克猫咪，背景是未来感十足的高楼大厦，画面需要有强烈的霓虹灯光效，使用水彩画风格呈现细节。'"></textarea>
+                                    <p v-if="form.mode === 'video'" class="text-xs text-gray-400 mt-1.5">
+                                        <i class="fas fa-info-circle mr-1"></i>通过 <code class="bg-gray-100 px-1 rounded">character1</code>、<code class="bg-gray-100 px-1 rounded">character2</code> 等标识引用参考素材中的角色（按上传顺序对应）。
+                                    </p>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video'">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         反向提示词 <span class="text-xs font-normal text-gray-400 ml-1">(Negative Prompt:
                                             不希望出现的元素)</span>
@@ -341,19 +429,20 @@
                                 </div>
 
                                 <div
-                                    class="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100">
+                                    :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : 'bg-gray-50 border-gray-100'"
+                                    class="flex items-center justify-between p-4 rounded-xl border">
                                     <div class="text-sm font-medium text-gray-500">
-                                        即将提交: <span class="text-indigo-600 font-bold text-lg">{{
+                                        即将提交: <span :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'" class="font-bold text-lg">{{
                                             calculateTotalTasks() }}</span> 个任务
                                     </div>
                                     <button @click="submitJob" :disabled="isSubmitDisabled"
-                                        class="inline-flex items-center px-8 py-3.5 border border-transparent text-base font-bold rounded-xl shadow-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5">
-                                        <i class="fas fa-paper-plane mr-2"
-                                            v-if="!isSubmitting && form.mode !== 'convert'"></i>
-                                        <i class="fas fa-crop-alt mr-2"
-                                            v-if="!isSubmitting && form.mode === 'convert'"></i>
-                                        <i class="fas fa-spinner fa-spin mr-2 text-lg" v-else-if="isSubmitting"></i>
-                                        {{ isSubmitting ? '处理中...' : (form.mode === 'convert' ? '提交 AI 重绘' : '提交生成') }}
+                                        :class="form.mode === 'video' ? 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'"
+                                        class="inline-flex items-center px-8 py-3.5 border border-transparent text-base font-bold rounded-xl shadow-lg text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5">
+                                        <i class="fas fa-paper-plane mr-2" v-if="!isSubmitting && !['convert','video'].includes(form.mode)"></i>
+                                        <i class="fas fa-crop-alt mr-2" v-if="!isSubmitting && form.mode === 'convert'"></i>
+                                        <i class="fas fa-film mr-2" v-if="!isSubmitting && form.mode === 'video'"></i>
+                                        <i class="fas fa-spinner fa-spin mr-2 text-lg" v-if="isSubmitting"></i>
+                                        {{ isSubmitting ? '处理中...' : (form.mode === 'convert' ? '提交 AI 重绘' : form.mode === 'video' ? '提交视频生成' : '提交生成') }}
                                     </button>
                                 </div>
                             </div>
@@ -397,11 +486,10 @@
                                     <div class="h-4 w-px bg-gray-300"></div>
                                     <span class="text-sm font-bold text-gray-700 flex items-center">
                                         <span class="bg-white p-1 rounded inline-flex shadow-sm mr-2">
-                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : 'fas fa-sitemap text-emerald-500'"
+                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : job.mode === 'video' ? 'fas fa-film text-rose-500' : 'fas fa-sitemap text-emerald-500'"
                                                 class="w-4 text-center"></i>
                                         </span>
-                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode ===
-                                        'convert' ? 'AI尺寸重绘' : '图片裂变任务' }}
+                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode === 'convert' ? 'AI尺寸重绘' : job.mode === 'video' ? '视频生成任务' : '图片裂变任务' }}
                                     </span>
                                     <span class="text-xs text-gray-500 ml-2" v-if="job.model_id">
                                         [<i class="fas fa-microchip mr-1"></i>{{ job.model_id }}]
@@ -486,6 +574,23 @@
                                             </div>
 
                                             <div class="flex-1 flex flex-col justify-end">
+                                                <!-- 视频结果 -->
+                                                <div v-if="res.videos && res.videos.length > 0" class="space-y-3">
+                                                    <div v-for="vid in res.videos" :key="vid.url" class="rounded-xl overflow-hidden bg-black shadow-md">
+                                                        <video :src="vid.url + '?token=' + getToken()" controls class="w-full max-h-72 object-contain" preload="metadata"></video>
+                                                        <div class="flex gap-2 p-2 bg-gray-900">
+                                                            <button @click.prevent="downloadImage(vid.url, vid.download_name)"
+                                                                class="flex-1 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-xs font-semibold flex items-center justify-center gap-1 transition-colors">
+                                                                <i class="fas fa-download"></i> 下载视频
+                                                            </button>
+                                                            <a :href="vid.url + '?token=' + getToken()" target="_blank"
+                                                                class="flex-1 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1 transition-colors">
+                                                                <i class="fas fa-external-link-alt"></i> 新窗口打开
+                                                            </a>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <!-- 图片结果 -->
                                                 <div v-if="res.images && res.images.length > 0"
                                                     class="grid grid-cols-2 gap-2">
                                                     <div v-for="img in res.images"
@@ -683,7 +788,7 @@
 
                 const currentTab = ref('create');
                 const availableModels = ref([]);
-                const form = ref({ mode: 't2i', model_id: 'gemini-3.1-flash-image', prompts: '', negative_prompt: '', files: [], selectedTemplate: '', batch_size: 4, target_ratio: '' });
+                const form = ref({ mode: 't2i', model_id: 'gemini-3.1-flash-image', prompts: '', negative_prompt: '', files: [], selectedTemplate: '', batch_size: 4, target_ratio: '', videoParams: { size: '1280*720', duration: 5, shot_type: 'single', audio: true, watermark: false } });
                 const templates = ref({ public: [], private: [] });
 
                 const showSaveTemplateModal = ref(false);
@@ -700,17 +805,29 @@
 
                 const getToken = () => localStorage.getItem('auth_token') || '';
 
+                const isVideoFile = (file) => {
+                    return file.type.startsWith('video/') || /\.(mp4|mov)$/i.test(file.name);
+                };
+
+                const filteredModels = (group) => {
+                    const isVideoMode = form.value.mode === 'video';
+                    return group.models.filter(m => isVideoMode ? m.type === 'video' : m.type !== 'video');
+                };
+
                 const calculateTotalTasks = () => {
-                    let pCount = form.value.mode === 'fission' ? 1 : 1;
+                    if (form.value.mode === 'video') return 1;
                     let fileCount = ['i2i', 'fission', 'convert'].includes(form.value.mode) && form.value.files.length > 0 ? form.value.files.length : 1;
                     let bSize = form.value.mode === 'fission' ? form.value.batch_size : 1;
-                    return pCount * fileCount * bSize;
+                    return fileCount * bSize;
                 };
 
                 const isSubmitDisabled = computed(() => {
                     if (isSubmitting.value) return true;
                     if (form.value.mode === 'convert') {
                         return form.value.files.length === 0 || !form.value.target_ratio;
+                    }
+                    if (form.value.mode === 'video') {
+                        return !form.value.prompts.trim();
                     }
                     if (form.value.mode !== 'fission' && !form.value.prompts.trim()) return true;
                     if (['i2i', 'fission'].includes(form.value.mode) && form.value.files.length === 0) return true;
@@ -856,16 +973,24 @@
                 };
 
                 const triggerFileInput = () => { if (fileInput.value) fileInput.value.click(); };
-                const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+                const allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];
+                const allowedVideoTypes = ['video/mp4', 'video/quicktime'];
+
+                const isAllowedFile = (file) => {
+                    if (form.value.mode === 'video') {
+                        return allowedImageTypes.includes(file.type) || allowedVideoTypes.includes(file.type) || /\.(mp4|mov)$/i.test(file.name);
+                    }
+                    return allowedImageTypes.includes(file.type);
+                };
 
                 const handleFileUpload = (event) => {
-                    if (event.target.files) Array.from(event.target.files).forEach(f => { if (allowedTypes.includes(f.type)) form.value.files.push(f); });
+                    if (event.target.files) Array.from(event.target.files).forEach(f => { if (isAllowedFile(f)) form.value.files.push(f); });
                     event.target.value = '';
                 };
 
                 const onDrop = (event) => {
                     isDragging.value = false;
-                    if (event.dataTransfer.files) Array.from(event.dataTransfer.files).forEach(f => { if (allowedTypes.includes(f.type)) form.value.files.push(f); });
+                    if (event.dataTransfer.files) Array.from(event.dataTransfer.files).forEach(f => { if (isAllowedFile(f)) form.value.files.push(f); });
                 };
 
                 const removeFile = (index) => {
@@ -912,11 +1037,20 @@
                     formData.append('batch_size', form.value.mode === 'fission' ? form.value.batch_size : 1);
                     formData.append('target_ratio', form.value.target_ratio);
 
+                    if (form.value.mode === 'video') {
+                        const vp = form.value.videoParams;
+                        formData.append('video_size', vp.size);
+                        formData.append('video_duration', vp.duration);
+                        formData.append('video_shot_type', vp.shot_type);
+                        formData.append('video_audio', vp.audio);
+                        formData.append('video_watermark', vp.watermark);
+                    }
+
                     let tplName = form.value.selectedTemplate;
                     if (tplName.includes(':')) tplName = tplName.split(':')[1];
                     formData.append('template_name', tplName);
 
-                    if (['i2i', 'fission', 'convert'].includes(form.value.mode)) {
+                    if (['i2i', 'fission', 'convert', 'video'].includes(form.value.mode)) {
                         form.value.files.forEach(file => formData.append('images', file));
                     }
 
@@ -972,10 +1106,12 @@
                     } catch (error) { alert("下载文件时遇到错误！"); }
                 };
 
-                // 判断任务中是否含有已成功生成的图片
+                // 判断任务中是否含有可下载的文件（图片或视频）
                 const hasImages = (job) => {
                     if (!job || !job.results) return false;
-                    return job.results.some(res => res.images && res.images.length > 0);
+                    return job.results.some(res =>
+                        (res.images && res.images.length > 0) || (res.videos && res.videos.length > 0)
+                    );
                 };
 
                 // 一键打包下载全部任务图片
@@ -1008,7 +1144,8 @@
                     isFetching, jobs, isSubmitDisabled, calculateTotalTasks, fileInput, triggerFileInput, handleFileUpload, onDrop,
                     removeFile, removeAllFiles, getObjectURL, submitJob, fetchJobs, deleteJob, handleTemplateSelect,
                     openSaveModal, saveTemplate, editTemplate, deleteTemplate, handleLogin, handleLogout,
-                    formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll
+                    formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll,
+                    isVideoFile, filteredModels
                 };
             }
         }).mount('#app');

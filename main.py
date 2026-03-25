@@ -87,7 +87,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), query_token: str = Que
 # ==========================================
 # 2. 动态加载模型配置
 # ==========================================
-def parse_models(env_str: str, provider_name: str, prefix: str):
+def parse_models(env_str: str, provider_name: str, prefix: str, model_type: str = "image"):
     if not env_str: return None
     models = []
     for item in env_str.split(','):
@@ -95,17 +95,18 @@ def parse_models(env_str: str, provider_name: str, prefix: str):
         parts = item.split(':', 1)
         m_id = parts[0].strip()
         m_name = parts[1].strip() if len(parts) > 1 else m_id
-        models.append({"id": m_id, "name": m_name, "prefix": prefix})
+        models.append({"id": m_id, "name": m_name, "prefix": prefix, "type": model_type})
     return {"provider": provider_name, "models": models} if models else None
 
 AVAILABLE_MODELS = []
-for env_key, prov_name, prefix in [
-    ("GEMINI_MODELS", "Google Gemini", "gemini"),
-    ("QWEN_MODELS", "Alibaba 通义千问", "qwen"),
-    ("MINIMAX_MODELS", "MiniMax 稀宇科技", "minimax"),
-    ("DOUBAO_MODELS", "ByteDance 豆包", "doubao")
+for env_key, prov_name, prefix, model_type in [
+    ("GEMINI_MODELS", "Google Gemini", "gemini", "image"),
+    ("QWEN_MODELS", "Alibaba 通义千问", "qwen", "image"),
+    ("MINIMAX_MODELS", "MiniMax 稀宇科技", "minimax", "image"),
+    ("DOUBAO_MODELS", "ByteDance 豆包", "doubao", "image"),
+    ("WAN_MODELS", "Alibaba 万相视频", "wan", "video"),
 ]:
-    parsed = parse_models(os.getenv(env_key, ""), prov_name, prefix)
+    parsed = parse_models(os.getenv(env_key, ""), prov_name, prefix, model_type)
     if parsed: AVAILABLE_MODELS.append(parsed)
 
 # ==========================================
@@ -268,6 +269,140 @@ def get_provider_for_model(model_id: str) -> ImageProvider:
     return GeminiProvider() # Default fallback
 
 # ==========================================
+# 万相视频生成 - DashScope OSS 文件上传
+# ==========================================
+import mimetypes
+
+async def upload_to_dashscope(file_path: str) -> str:
+    """将本地文件上传至 DashScope OSS，返回 oss:// 临时 URL"""
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    filename = os.path.basename(file_path)
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if not mime_type:
+        ext = os.path.splitext(filename)[1].lower()
+        mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+                    '.webp': 'image/webp', '.bmp': 'image/bmp',
+                    '.mp4': 'video/mp4', '.mov': 'video/quicktime'}
+        mime_type = mime_map.get(ext, 'application/octet-stream')
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    policy_resp = await asyncio.to_thread(
+        requests.get,
+        "https://dashscope.aliyuncs.com/api/v1/uploads",
+        headers=headers,
+        params={"action": "getPolicy", "fileName": filename, "contentType": mime_type}
+    )
+    if policy_resp.status_code != 200:
+        raise Exception(f"DashScope 上传策略获取失败 ({policy_resp.status_code}): {policy_resp.text}")
+
+    data = policy_resp.json().get("data", {})
+
+    with open(file_path, 'rb') as f:
+        file_content = f.read()
+
+    form_data = {
+        'key': data['key'],
+        'OSSAccessKeyId': data['OSSAccessKeyId'],
+        'policy': data['policy'],
+        'Signature': data['signature'],
+        'success_action_status': '200',
+        'Content-Type': mime_type,
+    }
+    for extra_key in ['x-oss-object-acl', 'x-oss-forbid-overwrite']:
+        if extra_key in data:
+            form_data[extra_key] = data[extra_key]
+
+    oss_resp = await asyncio.to_thread(
+        requests.post, data['host'],
+        data=form_data,
+        files={'file': (filename, file_content, mime_type)}
+    )
+    if oss_resp.status_code not in [200, 204]:
+        raise Exception(f"OSS 上传失败 (HTTP {oss_resp.status_code}): {oss_resp.text[:200]}")
+
+    return f"oss://dashscope-instant/{data['key']}"
+
+
+class WanVideoProvider:
+    def __init__(self):
+        self.api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        self.create_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+        self.query_base = "https://dashscope.aliyuncs.com/api/v1/tasks"
+
+    async def generate(self, model_id: str, prompt: str, reference_paths: List[str],
+                       user_dir: str, dl_base_name: str, user: str,
+                       size: str = "1280*720", duration: int = 5,
+                       shot_type: str = "single", audio: bool = True,
+                       watermark: bool = False) -> Tuple[List[dict], str]:
+        # 上传参考文件，获取 OSS 临时 URL
+        reference_urls = []
+        for path in reference_paths:
+            if path and os.path.exists(path):
+                url = await upload_to_dashscope(path)
+                reference_urls.append(url)
+
+        payload: dict = {
+            "model": model_id,
+            "input": {"prompt": prompt},
+            "parameters": {
+                "size": size,
+                "duration": duration,
+                "shot_type": shot_type,
+                "watermark": watermark,
+            }
+        }
+        if reference_urls:
+            payload["input"]["reference_urls"] = reference_urls
+        # audio 参数仅 flash 模型支持
+        if "flash" in model_id:
+            payload["parameters"]["audio"] = audio
+
+        headers = {
+            "X-DashScope-Async": "enable",
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        create_resp = await asyncio.to_thread(
+            requests.post, self.create_url, headers=headers, json=payload
+        )
+        create_data = create_resp.json()
+        if create_resp.status_code != 200:
+            raise Exception(f"创建万相视频任务失败: {create_data}")
+
+        task_id = create_data.get("output", {}).get("task_id")
+        if not task_id:
+            raise Exception(f"未获取到 task_id: {create_data}")
+
+        # 轮询结果（最多等待 20 分钟）
+        query_headers = {"Authorization": f"Bearer {self.api_key}"}
+        for _ in range(80):
+            await asyncio.sleep(15)
+            query_resp = await asyncio.to_thread(
+                requests.get, f"{self.query_base}/{task_id}", headers=query_headers
+            )
+            query_data = query_resp.json()
+            status = query_data.get("output", {}).get("task_status", "UNKNOWN")
+
+            if status == "SUCCEEDED":
+                video_url = query_data["output"]["video_url"]
+                video_data = await asyncio.to_thread(requests.get, video_url)
+                filename = f"vid_{uuid.uuid4().hex[:8]}.mp4"
+                filepath = os.path.join(user_dir, filename)
+                with open(filepath, "wb") as f:
+                    f.write(video_data.content)
+                return [{"url": f"/api/videos/{user}/{filename}", "download_name": f"{dl_base_name}.mp4", "type": "video"}], ""
+            elif status == "FAILED":
+                code = query_data["output"].get("code", "")
+                msg = query_data["output"].get("message", "Unknown error")
+                raise Exception(f"万相视频生成失败 [{code}]: {msg}")
+            elif status == "UNKNOWN":
+                raise Exception(f"任务 {task_id} 不存在 (UNKNOWN)")
+            # PENDING / RUNNING: 继续等待
+
+        raise Exception(f"视频生成超时（task_id: {task_id}）")
+
+# ==========================================
 # 4. 任务队列调度
 # ==========================================
 class JobQueue:
@@ -295,15 +430,15 @@ class JobQueue:
                             self.jobs[j["id"]] = j
                 except Exception: pass
 
-    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", model_id="", negative_prompt="", batch_size=1, target_ratio=""):
+    async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", model_id="", negative_prompt="", batch_size=1, target_ratio="", video_params=None):
         job_id = str(uuid.uuid4())
-        total_tasks = len(prompts) * max(1, len(source_image_paths) if source_image_paths else 1) * batch_size
+        total_tasks = 1 if mode == "video" else len(prompts) * max(1, len(source_image_paths) if source_image_paths else 1) * batch_size
         self.jobs[job_id] = {
             "id": job_id, "user": user, "mode": mode, "model_id": model_id,
             "status": "queued", "total": total_tasks, "completed": 0, "failed": 0,
             "results": [], "created_at": time.time(), "eta": None,
             "template_name": template_name, "negative_prompt": negative_prompt,
-            "target_ratio": target_ratio
+            "target_ratio": target_ratio, "video_params": video_params or {}
         }
         self.sync_user_jobs(user)
         await self.queue.put((job_id, user, prompts, source_image_paths, template_name, model_id, negative_prompt, batch_size, target_ratio))
@@ -315,45 +450,79 @@ async def process_queue():
     while True:
         job_data = await job_queue.queue.get()
         job_id, user, prompts, source_image_paths, tpl_name, model_id, negative_prompt, batch_size, target_ratio = job_data
-        
+
         job = job_queue.jobs[job_id]
         job["status"] = "processing"
         user_dir = f"users/{user}/outputs"
         os.makedirs(user_dir, exist_ok=True)
+
+        # ==========================================
+        # 视频生成模式 (万相 WAN)
+        # ==========================================
+        if job["mode"] == "video":
+            prompt = prompts[0] if prompts else ""
+            dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            vp = job.get("video_params", {})
+            try:
+                wan_provider = WanVideoProvider()
+                videos, _ = await wan_provider.generate(
+                    model_id=model_id,
+                    prompt=prompt,
+                    reference_paths=source_image_paths or [],
+                    user_dir=user_dir,
+                    dl_base_name=dl_base_name,
+                    user=user,
+                    size=vp.get("size", "1280*720"),
+                    duration=int(vp.get("duration", 5)),
+                    shot_type=vp.get("shot_type", "single"),
+                    audio=bool(vp.get("audio", True)),
+                    watermark=bool(vp.get("watermark", False)),
+                )
+                job["results"].append({"prompt": prompt, "videos": videos, "images": [], "status": "success"})
+                job["completed"] += 1
+            except Exception as e:
+                job["results"].append({"prompt": prompt, "error": str(e), "status": "error"})
+                job["failed"] += 1
+            job["status"] = "completed"
+            job["eta"] = 0
+            job_queue.sync_user_jobs(user)
+            job_queue.queue.task_done()
+            continue
+
+        # ==========================================
+        # 图像生成模式 (原有逻辑)
+        # ==========================================
         provider = get_provider_for_model(model_id)
-        
+
         tasks = []
         for _ in range(batch_size):
             if job["mode"] in ['i2i', 'fission', 'convert'] and source_image_paths:
                 tasks.extend([(p, img_path) for img_path in source_image_paths for p in prompts])
             else:
                 tasks.extend([(p, None) for p in prompts])
-                
+
         avg_time = 5.0
         for i, (prompt, img_path) in enumerate(tasks):
             start_time = time.time()
             try:
                 base_src = os.path.splitext(os.path.basename(img_path).split('_', 1)[-1])[0] if img_path else "t2i"
                 dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"{base_src}_{tpl_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if tpl_name else f"{base_src}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-                
-                # --- 新增: 添加重试机制与指数退避 (Exponential Backoff) 处理频控限流问题 ---
+
+                # --- 添加重试机制与指数退避 (Exponential Backoff) 处理频控限流问题 ---
                 max_retries = 3
                 generated_images, final_text = [], ""
-                
+
                 for attempt in range(max_retries):
                     try:
                         generated_images, final_text = await provider.generate(model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio)
-                        break # 成功则跳出重试循环
+                        break
                     except Exception as e:
                         error_msg = str(e).lower()
-                        # 检测是否为触发限频 (Rate Limit / 429)
                         if attempt < max_retries - 1 and ("rate limit" in error_msg or "429" in error_msg or "throttling" in error_msg or "too quickly" in error_msg):
-                            # 指数退避: 延时 2s, 4s...
                             await asyncio.sleep(2 ** (attempt + 1))
                             continue
-                        # 如果不是限流错误或达到最大重试次数，抛出最后一次的异常
                         raise e
-                
+
                 job["results"].append({
                     "prompt": prompt, "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
                     "result": final_text.strip(), "images": generated_images, "status": "success"
@@ -362,15 +531,15 @@ async def process_queue():
             except Exception as e:
                 job["results"].append({"prompt": prompt, "error": str(e), "status": "error"})
                 job["failed"] += 1
-                
+
             avg_time = (avg_time * i + (time.time() - start_time)) / (i + 1)
             job["eta"] = max(0, (job["total"] - job["completed"] - job["failed"]) * avg_time)
             job_queue.sync_user_jobs(user)
-            
-            # --- 新增: 请求间隙平滑缓冲，避免连续瞬发打满通道引发 BurstRate limit ---
+
+            # 请求间隙平滑缓冲，避免连续瞬发打满通道引发 BurstRate limit
             if i < len(tasks) - 1:
                 await asyncio.sleep(1.5)
-            
+
         job["status"] = "completed"
         job["eta"] = 0
         job_queue.sync_user_jobs(user)
@@ -436,32 +605,45 @@ async def create_job(
     prompts: str = Form(""), negative_prompt: str = Form(""), mode: str = Form(...),
     template_name: str = Form(""), model_id: str = Form(""), batch_size: int = Form(1),
     target_ratio: str = Form(""),
+    video_size: str = Form("1280*720"), video_duration: int = Form(5),
+    video_shot_type: str = Form("single"), video_audio: bool = Form(True),
+    video_watermark: bool = Form(False),
     images: Optional[List[UploadFile]] = File(None), curr: dict = Depends(get_current_user)
 ):
-    user, prompt_str = prompts.strip(), prompts.strip()
-    
-    # --- 关键逻辑变更 ---
-    if mode == "fission" and not prompt_str: 
+    prompt_str = prompts.strip()
+
+    if mode == "fission" and not prompt_str:
         prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
     elif mode == "convert" and not prompt_str:
         prompt_str = "保持原图主体和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
-    elif not prompt_str: 
+    elif mode != "video" and not prompt_str:
         return {"error": "No prompt provided"}
-    
+    elif mode == "video" and not prompt_str:
+        return {"error": "视频生成需要填写提示词"}
+
     source_paths = []
-    if mode in ["i2i", "fission", "convert"] and images:
+    if images:
         os.makedirs(f"users/{curr['username']}/outputs", exist_ok=True)
         for img in images:
             if img and getattr(img, "filename", None):
                 path = os.path.join(f"users/{curr['username']}/outputs", f"{uuid.uuid4().hex[:8]}_{img.filename}")
                 img_data = await img.read()
-                
-                with open(path, "wb") as f: 
+                with open(path, "wb") as f:
                     f.write(img_data)
-                    
                 source_paths.append(path)
-                
-    job = await job_queue.add_job(curr['username'], mode, [prompt_str], source_paths, template_name, model_id, negative_prompt, batch_size, target_ratio)
+
+    video_params = None
+    if mode == "video":
+        video_params = {
+            "size": video_size, "duration": video_duration,
+            "shot_type": video_shot_type, "audio": video_audio, "watermark": video_watermark
+        }
+
+    job = await job_queue.add_job(
+        curr['username'], mode, [prompt_str], source_paths,
+        template_name, model_id, negative_prompt, batch_size, target_ratio,
+        video_params=video_params
+    )
     return job
 
 @app.get("/api/jobs")
@@ -482,8 +664,14 @@ async def serve_img(username: str, filename: str, curr: dict = Depends(get_curre
     path = os.path.join(f"users/{username}/outputs", filename)
     return FileResponse(path) if os.path.exists(path) else JSONResponse(status_code=404, content={"error": "Not found"})
 
+@app.get("/api/videos/{username}/{filename}")
+async def serve_video(username: str, filename: str, curr: dict = Depends(get_current_user)):
+    if curr["username"] != username and not curr["is_admin"]: return JSONResponse(status_code=403, content={"error": "Forbidden"})
+    path = os.path.join(f"users/{username}/outputs", filename)
+    return FileResponse(path, media_type="video/mp4") if os.path.exists(path) else JSONResponse(status_code=404, content={"error": "Not found"})
+
 @app.get("/api/jobs/{job_id}/download")
-def download_job_images(job_id: str, curr: dict = Depends(get_current_user)):
+def download_job_files(job_id: str, curr: dict = Depends(get_current_user)):
     job = job_queue.jobs.get(job_id)
     if not job or (job["user"] != curr["username"] and not curr["is_admin"]):
         return JSONResponse(status_code=403, content={"error": "Forbidden"})
@@ -492,14 +680,17 @@ def download_job_images(job_id: str, curr: dict = Depends(get_current_user)):
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
         for res in job.get("results", []):
             for img in res.get("images", []):
-                # 提取本地文件名
                 filename = img["url"].split("/")[-1]
                 file_path = os.path.join(f"users/{job['user']}/outputs", filename)
                 if os.path.exists(file_path):
-                    # 为了防止批处理产生的名字重复覆盖，在压缩包内拼接上生成的唯一标识作为文件名前缀
                     unique_prefix = filename.split('_')[1].split('.')[0] if '_' in filename else uuid.uuid4().hex[:6]
                     zip_name = f"{unique_prefix}_{img.get('download_name', filename)}"
                     zip_file.write(file_path, arcname=zip_name)
+            for vid in res.get("videos", []):
+                filename = vid["url"].split("/")[-1]
+                file_path = os.path.join(f"users/{job['user']}/outputs", filename)
+                if os.path.exists(file_path):
+                    zip_file.write(file_path, arcname=vid.get('download_name', filename))
 
     zip_buffer.seek(0)
     return StreamingResponse(
