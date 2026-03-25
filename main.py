@@ -271,56 +271,62 @@ def get_provider_for_model(model_id: str) -> ImageProvider:
 # ==========================================
 # 万相视频生成 - DashScope OSS 文件上传
 # ==========================================
-import mimetypes
-
-async def upload_to_dashscope(file_path: str) -> str:
+async def upload_to_dashscope(file_path: str, model_id: str) -> str:
     """将本地文件上传至 DashScope OSS，返回 oss:// 临时 URL"""
     api_key = os.getenv("DASHSCOPE_API_KEY", "")
     filename = os.path.basename(file_path)
-    mime_type, _ = mimetypes.guess_type(file_path)
-    if not mime_type:
-        ext = os.path.splitext(filename)[1].lower()
-        mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-                    '.webp': 'image/webp', '.bmp': 'image/bmp',
-                    '.mp4': 'video/mp4', '.mov': 'video/quicktime'}
-        mime_type = mime_map.get(ext, 'application/octet-stream')
 
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    # 修复点 1：根据官方文档，getPolicy 的必需参数为 action 和 model。
+    params = {
+        "action": "getPolicy",
+        "model": model_id
+    }
+    
     policy_resp = await asyncio.to_thread(
         requests.get,
         "https://dashscope.aliyuncs.com/api/v1/uploads",
         headers=headers,
-        params={"action": "getPolicy", "fileName": filename, "contentType": mime_type}
+        params=params
     )
     if policy_resp.status_code != 200:
         raise Exception(f"DashScope 上传策略获取失败 ({policy_resp.status_code}): {policy_resp.text}")
 
-    data = policy_resp.json().get("data", {})
+    policy_data = policy_resp.json().get("data", {})
+    key = f"{policy_data.get('upload_dir', '')}/{filename}"
 
     with open(file_path, 'rb') as f:
         file_content = f.read()
 
-    form_data = {
-        'key': data['key'],
-        'OSSAccessKeyId': data['OSSAccessKeyId'],
-        'policy': data['policy'],
-        'Signature': data['signature'],
-        'success_action_status': '200',
-        'Content-Type': mime_type,
+    # 修复点 2：严格按照官方文档字段拼接 OSS 上传表单
+    files = {
+        'OSSAccessKeyId': (None, policy_data.get('oss_access_key_id')),
+        'Signature': (None, policy_data.get('signature')),
+        'policy': (None, policy_data.get('policy')),
+        'key': (None, key),
+        'success_action_status': (None, '200'),
     }
-    for extra_key in ['x-oss-object-acl', 'x-oss-forbid-overwrite']:
-        if extra_key in data:
-            form_data[extra_key] = data[extra_key]
+    
+    if 'x_oss_object_acl' in policy_data:
+        files['x-oss-object-acl'] = (None, policy_data['x_oss_object_acl'])
+    if 'x_oss_forbid_overwrite' in policy_data:
+        files['x-oss-forbid-overwrite'] = (None, policy_data['x_oss_forbid_overwrite'])
+        
+    files['file'] = (filename, file_content)
 
     oss_resp = await asyncio.to_thread(
-        requests.post, data['host'],
-        data=form_data,
-        files={'file': (filename, file_content, mime_type)}
+        requests.post, 
+        policy_data.get('upload_host'),
+        files=files
     )
+    
     if oss_resp.status_code not in [200, 204]:
         raise Exception(f"OSS 上传失败 (HTTP {oss_resp.status_code}): {oss_resp.text[:200]}")
 
-    return f"oss://dashscope-instant/{data['key']}"
+    return f"oss://{key}"
 
 
 class WanVideoProvider:
@@ -338,7 +344,8 @@ class WanVideoProvider:
         reference_urls = []
         for path in reference_paths:
             if path and os.path.exists(path):
-                url = await upload_to_dashscope(path)
+                # 修复点 3：传入对应的 model_id 获取专属于该模型的临时上传凭证
+                url = await upload_to_dashscope(path, model_id)
                 reference_urls.append(url)
 
         payload: dict = {
@@ -360,7 +367,9 @@ class WanVideoProvider:
         headers = {
             "X-DashScope-Async": "enable",
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            # 修复点 4：使用 OSS 临时地址进行推理时，必须补充启用资源解析 Header
+            "X-DashScope-OssResourceResolve": "enable"
         }
 
         create_resp = await asyncio.to_thread(
