@@ -336,7 +336,23 @@ async def process_queue():
                 base_src = os.path.splitext(os.path.basename(img_path).split('_', 1)[-1])[0] if img_path else "t2i"
                 dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"{base_src}_{tpl_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if tpl_name else f"{base_src}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
                 
-                generated_images, final_text = await provider.generate(model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio)
+                # --- 新增: 添加重试机制与指数退避 (Exponential Backoff) 处理频控限流问题 ---
+                max_retries = 3
+                generated_images, final_text = [], ""
+                
+                for attempt in range(max_retries):
+                    try:
+                        generated_images, final_text = await provider.generate(model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio)
+                        break # 成功则跳出重试循环
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        # 检测是否为触发限频 (Rate Limit / 429)
+                        if attempt < max_retries - 1 and ("rate limit" in error_msg or "429" in error_msg or "throttling" in error_msg or "too quickly" in error_msg):
+                            # 指数退避: 延时 2s, 4s...
+                            await asyncio.sleep(2 ** (attempt + 1))
+                            continue
+                        # 如果不是限流错误或达到最大重试次数，抛出最后一次的异常
+                        raise e
                 
                 job["results"].append({
                     "prompt": prompt, "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
@@ -350,6 +366,10 @@ async def process_queue():
             avg_time = (avg_time * i + (time.time() - start_time)) / (i + 1)
             job["eta"] = max(0, (job["total"] - job["completed"] - job["failed"]) * avg_time)
             job_queue.sync_user_jobs(user)
+            
+            # --- 新增: 请求间隙平滑缓冲，避免连续瞬发打满通道引发 BurstRate limit ---
+            if i < len(tasks) - 1:
+                await asyncio.sleep(1.5)
             
         job["status"] = "completed"
         job["eta"] = 0
