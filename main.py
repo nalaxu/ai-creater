@@ -12,7 +12,7 @@ import zipfile
 import dashscope
 from dashscope import MultiModalConversation
 from dotenv import load_dotenv
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 load_dotenv()
@@ -109,6 +109,139 @@ for env_key, prov_name, prefix, model_type in [
     parsed = parse_models(os.getenv(env_key, ""), prov_name, prefix, model_type)
     if parsed: AVAILABLE_MODELS.append(parsed)
 
+ALIYUN_QWEN_STRICT_MODELS = {"qwen-image-2.0-pro", "qwen-image-2.0-pro-2026-03-03"}
+
+
+def is_aliyun_model(model_id: str) -> bool:
+    return model_id.startswith("qwen") or model_id.startswith("wan")
+
+
+def get_aliyun_rate_rule(model_id: str) -> Dict[str, float]:
+    if model_id in ALIYUN_QWEN_STRICT_MODELS:
+        # 阿里云文档中该模型任务提交限制为 2 次/分钟，连续任务按 31 秒间隔处理更稳妥。
+        return {"min_interval": 31.0, "retry_penalty": 35.0}
+    if model_id.startswith("wan"):
+        return {"min_interval": 1.2, "retry_penalty": 5.0}
+    if model_id.startswith("qwen"):
+        return {"min_interval": 1.2, "retry_penalty": 8.0}
+    return {"min_interval": 0.0, "retry_penalty": 0.0}
+
+
+def is_rate_limit_error(message: str) -> bool:
+    msg = (message or "").lower()
+    keywords = [
+        "429", "rate limit", "throttl", "too quickly", "requests limit",
+        "quota", "request rate increased", "allocated quota exceeded"
+    ]
+    return any(k in msg for k in keywords)
+
+
+class AliyunRateLimiter:
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self._next_allowed_at: Dict[str, float] = {}
+
+    async def wait(self, model_id: str):
+        if not is_aliyun_model(model_id):
+            return
+        delay = 0.0
+        async with self._lock:
+            now = time.monotonic()
+            next_allowed = self._next_allowed_at.get(model_id, now)
+            delay = max(0.0, next_allowed - now)
+            interval = get_aliyun_rate_rule(model_id)["min_interval"]
+            self._next_allowed_at[model_id] = max(now, next_allowed) + interval
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    async def penalize(self, model_id: str, attempt: int = 0):
+        if not is_aliyun_model(model_id):
+            return
+        rule = get_aliyun_rate_rule(model_id)
+        penalty = rule["retry_penalty"] * max(1, attempt + 1)
+        async with self._lock:
+            now = time.monotonic()
+            self._next_allowed_at[model_id] = max(self._next_allowed_at.get(model_id, now), now + penalty)
+
+
+aliyun_rate_limiter = AliyunRateLimiter()
+
+
+def make_subtask(prompt: str, source_img: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "prompt": prompt,
+        "source_img": source_img,
+        "status": "pending",
+        "attempts": 0,
+        "result_index": None,
+    }
+
+
+def build_subtasks(mode: str, prompts: List[str], source_image_paths: Optional[List[str]], batch_size: int) -> List[Dict[str, Any]]:
+    if mode == "video":
+        return [make_subtask(prompts[0] if prompts else "", source_image_paths[0] if source_image_paths else None)]
+
+    subtasks = []
+    for _ in range(batch_size):
+        if mode in ["i2i", "fission", "convert"] and source_image_paths:
+            for img_path in source_image_paths:
+                for prompt in prompts:
+                    subtasks.append(make_subtask(prompt, img_path))
+        else:
+            for prompt in prompts:
+                subtasks.append(make_subtask(prompt, None))
+    return subtasks
+
+
+def refresh_job_progress(job: Dict[str, Any]):
+    subtasks = job.get("subtasks", [])
+    job["total"] = len(subtasks)
+    job["completed"] = sum(1 for t in subtasks if t.get("status") == "success")
+    job["failed"] = sum(1 for t in subtasks if t.get("status") == "error")
+
+
+def upsert_task_result(job: Dict[str, Any], subtask: Dict[str, Any], payload: Dict[str, Any]):
+    payload["task_id"] = subtask["id"]
+    idx = subtask.get("result_index")
+    if idx is None or idx >= len(job["results"]):
+        job["results"].append(payload)
+        subtask["result_index"] = len(job["results"]) - 1
+    else:
+        job["results"][idx] = payload
+
+
+def normalize_job(job: Dict[str, Any]):
+    job.setdefault("results", [])
+    job.setdefault("template_name", "")
+    job.setdefault("negative_prompt", "")
+    job.setdefault("target_ratio", "")
+    job.setdefault("video_params", {})
+    job.setdefault("eta", None)
+    if not job.get("subtasks"):
+        subtasks = []
+        for res in job.get("results", []):
+            subtask = make_subtask(res.get("prompt", ""), res.get("source_img"))
+            subtask["id"] = res.get("task_id") or subtask["id"]
+            subtask["status"] = "success" if res.get("status") == "success" else "error"
+            subtask["attempts"] = max(1, res.get("attempts", 1 if subtask["status"] != "pending" else 0))
+            subtasks.append(subtask)
+            res["task_id"] = subtask["id"]
+        job["subtasks"] = subtasks
+        for idx, subtask in enumerate(job["subtasks"]):
+            subtask["result_index"] = idx if idx < len(job["results"]) else None
+    else:
+        for idx, subtask in enumerate(job["subtasks"]):
+            subtask.setdefault("id", uuid.uuid4().hex[:12])
+            subtask.setdefault("prompt", "")
+            subtask.setdefault("source_img", None)
+            subtask.setdefault("status", "pending")
+            subtask.setdefault("attempts", 0)
+            subtask.setdefault("result_index", idx if idx < len(job["results"]) else None)
+            if subtask["result_index"] is not None and subtask["result_index"] < len(job["results"]):
+                job["results"][subtask["result_index"]]["task_id"] = subtask["id"]
+    refresh_job_progress(job)
+
 # ==========================================
 # 3. 供应商策略模式封装 (Provider Pattern)
 # ==========================================
@@ -194,6 +327,7 @@ class QwenProvider(ImageProvider):
     def __init__(self): dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
     
     async def generate(self, model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio=""):
+        await aliyun_rate_limiter.wait(model_id)
         size_param = "1024*1024"
         
         # 尺寸策略：qwen-image-2.0-pro 传参数，其他模型改提示词
@@ -341,6 +475,7 @@ class WanVideoProvider:
                        shot_type: str = "single", audio: bool = True,
                        watermark: bool = False) -> Tuple[List[dict], str]:
         # 上传参考文件，获取 OSS 临时 URL
+        await aliyun_rate_limiter.wait(model_id)
         reference_urls = []
         for path in reference_paths:
             if path and os.path.exists(path):
@@ -414,6 +549,20 @@ class WanVideoProvider:
 # ==========================================
 # 4. 任务队列调度
 # ==========================================
+async def run_with_retries(callable_factory, model_id: str, max_retries: int = 5):
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return await callable_factory()
+        except Exception as e:
+            last_error = e
+            if attempt >= max_retries - 1 or not is_rate_limit_error(str(e)):
+                raise
+            await aliyun_rate_limiter.penalize(model_id, attempt)
+    if last_error:
+        raise last_error
+
+
 class JobQueue:
     def __init__(self):
         self.jobs = {}
@@ -433,34 +582,80 @@ class JobQueue:
                 try:
                     with open(jobs_file, "r", encoding="utf-8") as f:
                         for j in json.load(f):
+                            normalize_job(j)
                             if j["status"] in ["queued", "processing"]:
                                 j["status"] = "failed"
                                 j["results"].append({"error": "服务曾被重启，该任务已中断", "status": "error"})
+                                for subtask in j.get("subtasks", []):
+                                    if subtask.get("status") == "pending":
+                                        subtask["status"] = "error"
+                                        subtask["attempts"] = max(1, subtask.get("attempts", 0))
+                                        upsert_task_result(j, subtask, {
+                                            "prompt": subtask.get("prompt", ""),
+                                            "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None,
+                                            "error": "服务曾被重启，该子任务已中断",
+                                            "status": "error",
+                                            "attempts": subtask["attempts"],
+                                        })
+                                refresh_job_progress(j)
                             self.jobs[j["id"]] = j
                 except Exception: pass
 
     async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", model_id="", negative_prompt="", batch_size=1, target_ratio="", video_params=None):
         job_id = str(uuid.uuid4())
-        total_tasks = 1 if mode == "video" else len(prompts) * max(1, len(source_image_paths) if source_image_paths else 1) * batch_size
         self.jobs[job_id] = {
             "id": job_id, "user": user, "mode": mode, "model_id": model_id,
-            "status": "queued", "total": total_tasks, "completed": 0, "failed": 0,
+            "status": "queued", "total": 0, "completed": 0, "failed": 0,
             "results": [], "created_at": time.time(), "eta": None,
             "template_name": template_name, "negative_prompt": negative_prompt,
-            "target_ratio": target_ratio, "video_params": video_params or {}
+            "target_ratio": target_ratio, "video_params": video_params or {},
+            "subtasks": build_subtasks(mode, prompts, source_image_paths, batch_size)
         }
+        refresh_job_progress(self.jobs[job_id])
         self.sync_user_jobs(user)
-        await self.queue.put((job_id, user, prompts, source_image_paths, template_name, model_id, negative_prompt, batch_size, target_ratio))
+        await self.queue.put({"job_id": job_id, "subtask_ids": None})
         return self.jobs[job_id]
+
+    async def retry_failed_subtasks(self, job_id: str, task_ids: Optional[List[str]] = None):
+        job = self.jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job["status"] in ["queued", "processing"]:
+            raise HTTPException(status_code=409, detail="Job is already queued or processing")
+
+        candidates = [t for t in job.get("subtasks", []) if t.get("status") == "error"]
+        if task_ids is not None:
+            wanted = set(task_ids)
+            candidates = [t for t in candidates if t["id"] in wanted]
+        if not candidates:
+            raise HTTPException(status_code=400, detail="No failed subtasks to retry")
+
+        for subtask in candidates:
+            subtask["status"] = "pending"
+        refresh_job_progress(job)
+        job["status"] = "queued"
+        job["eta"] = None
+        self.sync_user_jobs(job["user"])
+        await self.queue.put({"job_id": job_id, "subtask_ids": [t["id"] for t in candidates]})
+        return job
 
 job_queue = JobQueue()
 
 async def process_queue():
     while True:
         job_data = await job_queue.queue.get()
-        job_id, user, prompts, source_image_paths, tpl_name, model_id, negative_prompt, batch_size, target_ratio = job_data
+        if isinstance(job_data, dict):
+            job_id = job_data["job_id"]
+        else:
+            job_id = job_data[0]
 
         job = job_queue.jobs[job_id]
+        normalize_job(job)
+        user = job["user"]
+        tpl_name = job.get("template_name", "")
+        model_id = job.get("model_id", "")
+        negative_prompt = job.get("negative_prompt", "")
+        target_ratio = job.get("target_ratio", "")
         job["status"] = "processing"
         user_dir = f"users/{user}/outputs"
         os.makedirs(user_dir, exist_ok=True)
@@ -469,29 +664,41 @@ async def process_queue():
         # 视频生成模式 (万相 WAN)
         # ==========================================
         if job["mode"] == "video":
-            prompt = prompts[0] if prompts else ""
+            subtask = next((t for t in job.get("subtasks", []) if t.get("status") == "pending"), None)
+            if not subtask:
+                job["status"] = "completed"
+                job["eta"] = 0
+                job_queue.sync_user_jobs(user)
+                job_queue.queue.task_done()
+                continue
+            prompt = subtask.get("prompt", "")
             dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             vp = job.get("video_params", {})
             try:
+                subtask["attempts"] = subtask.get("attempts", 0) + 1
                 wan_provider = WanVideoProvider()
-                videos, _ = await wan_provider.generate(
+                videos, _ = await run_with_retries(
+                    lambda: wan_provider.generate(
+                        model_id=model_id,
+                        prompt=prompt,
+                        reference_paths=[subtask["source_img"]] if subtask.get("source_img") else [],
+                        user_dir=user_dir,
+                        dl_base_name=dl_base_name,
+                        user=user,
+                        size=vp.get("size", "1280*720"),
+                        duration=int(vp.get("duration", 5)),
+                        shot_type=vp.get("shot_type", "single"),
+                        audio=bool(vp.get("audio", True)),
+                        watermark=bool(vp.get("watermark", False)),
+                    ),
                     model_id=model_id,
-                    prompt=prompt,
-                    reference_paths=source_image_paths or [],
-                    user_dir=user_dir,
-                    dl_base_name=dl_base_name,
-                    user=user,
-                    size=vp.get("size", "1280*720"),
-                    duration=int(vp.get("duration", 5)),
-                    shot_type=vp.get("shot_type", "single"),
-                    audio=bool(vp.get("audio", True)),
-                    watermark=bool(vp.get("watermark", False)),
                 )
-                job["results"].append({"prompt": prompt, "videos": videos, "images": [], "status": "success"})
-                job["completed"] += 1
+                subtask["status"] = "success"
+                upsert_task_result(job, subtask, {"prompt": prompt, "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None, "videos": videos, "images": [], "status": "success", "attempts": subtask["attempts"]})
             except Exception as e:
-                job["results"].append({"prompt": prompt, "error": str(e), "status": "error"})
-                job["failed"] += 1
+                subtask["status"] = "error"
+                upsert_task_result(job, subtask, {"prompt": prompt, "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None, "error": str(e), "status": "error", "attempts": subtask["attempts"]})
+            refresh_job_progress(job)
             job["status"] = "completed"
             job["eta"] = 0
             job_queue.sync_user_jobs(user)
@@ -503,51 +710,52 @@ async def process_queue():
         # ==========================================
         provider = get_provider_for_model(model_id)
 
-        tasks = []
-        for _ in range(batch_size):
-            if job["mode"] in ['i2i', 'fission', 'convert'] and source_image_paths:
-                tasks.extend([(p, img_path) for img_path in source_image_paths for p in prompts])
-            else:
-                tasks.extend([(p, None) for p in prompts])
+        tasks = [t for t in job.get("subtasks", []) if t.get("status") == "pending"]
 
         avg_time = 5.0
-        for i, (prompt, img_path) in enumerate(tasks):
+        for i, subtask in enumerate(tasks):
             start_time = time.time()
+            prompt = subtask.get("prompt", "")
+            img_path = subtask.get("source_img")
             try:
                 base_src = os.path.splitext(os.path.basename(img_path).split('_', 1)[-1])[0] if img_path else "t2i"
                 dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"{base_src}_{tpl_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if tpl_name else f"{base_src}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
                 # --- 添加重试机制与指数退避 (Exponential Backoff) 处理频控限流问题 ---
-                max_retries = 3
-                generated_images, final_text = [], ""
+                subtask["attempts"] = subtask.get("attempts", 0) + 1
+                generated_images, final_text = await run_with_retries(
+                    lambda: provider.generate(model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio),
+                    model_id=model_id,
+                )
 
-                for attempt in range(max_retries):
-                    try:
-                        generated_images, final_text = await provider.generate(model_id, prompt, negative_prompt, img_path, user_dir, dl_base_name, user, target_ratio)
-                        break
-                    except Exception as e:
-                        error_msg = str(e).lower()
-                        if attempt < max_retries - 1 and ("rate limit" in error_msg or "429" in error_msg or "throttling" in error_msg or "too quickly" in error_msg):
-                            await asyncio.sleep(2 ** (attempt + 1))
-                            continue
-                        raise e
-
-                job["results"].append({
-                    "prompt": prompt, "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
-                    "result": final_text.strip(), "images": generated_images, "status": "success"
+                subtask["status"] = "success"
+                upsert_task_result(job, subtask, {
+                    "prompt": prompt,
+                    "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
+                    "result": final_text.strip(),
+                    "images": generated_images,
+                    "status": "success",
+                    "attempts": subtask["attempts"],
                 })
-                job["completed"] += 1
             except Exception as e:
-                job["results"].append({"prompt": prompt, "error": str(e), "status": "error"})
-                job["failed"] += 1
+                subtask["status"] = "error"
+                upsert_task_result(job, subtask, {
+                    "prompt": prompt,
+                    "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
+                    "error": str(e),
+                    "status": "error",
+                    "attempts": subtask["attempts"],
+                })
 
+            refresh_job_progress(job)
             avg_time = (avg_time * i + (time.time() - start_time)) / (i + 1)
-            job["eta"] = max(0, (job["total"] - job["completed"] - job["failed"]) * avg_time)
+            pending_count = sum(1 for t in job.get("subtasks", []) if t.get("status") == "pending")
+            job["eta"] = max(0, pending_count * avg_time)
             job_queue.sync_user_jobs(user)
 
             # 请求间隙平滑缓冲，避免连续瞬发打满通道引发 BurstRate limit
             if i < len(tasks) - 1:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.2)
 
         job["status"] = "completed"
         job["eta"] = 0
@@ -624,7 +832,7 @@ async def create_job(
     if mode == "fission" and not prompt_str:
         prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
     elif mode == "convert" and not prompt_str:
-        prompt_str = "保持原图主体和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
+        prompt_str = "保持原图主体结构和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
     elif mode != "video" and not prompt_str:
         return {"error": "No prompt provided"}
     elif mode == "video" and not prompt_str:
@@ -658,6 +866,26 @@ async def create_job(
 @app.get("/api/jobs")
 def get_jobs(curr: dict = Depends(get_current_user)):
     return sorted([j for j in job_queue.jobs.values() if j.get("user") == curr["username"]], key=lambda x: x['created_at'], reverse=True)
+
+@app.post("/api/jobs/{job_id}/retry-failed")
+async def retry_failed_job_tasks(job_id: str, curr: dict = Depends(get_current_user)):
+    job = job_queue.jobs.get(job_id)
+    if not job or (job["user"] != curr["username"] and not curr["is_admin"]):
+        return JSONResponse(status_code=403, content={"error": "Forbidden"})
+    try:
+        return await job_queue.retry_failed_subtasks(job_id)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+
+@app.post("/api/jobs/{job_id}/retry-task/{task_id}")
+async def retry_single_job_task(job_id: str, task_id: str, curr: dict = Depends(get_current_user)):
+    job = job_queue.jobs.get(job_id)
+    if not job or (job["user"] != curr["username"] and not curr["is_admin"]):
+        return JSONResponse(status_code=403, content={"error": "Forbidden"})
+    try:
+        return await job_queue.retry_failed_subtasks(job_id, [task_id])
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.detail})
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str, curr: dict = Depends(get_current_user)):
