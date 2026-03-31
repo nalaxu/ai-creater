@@ -1072,7 +1072,7 @@
                 const handlePaste = (event) => {
                     const items = event.clipboardData && event.clipboardData.items;
                     if (!items) return;
-                    if (!['i2i', 'fission', 'convert', 'video'].includes(form.value.mode)) return;
+                    if (!['i2i', 'fission', 'convert', 'video', 'extract'].includes(form.value.mode)) return;
                     Array.from(items).forEach(item => {
                         if (item.kind === 'file') {
                             const file = item.getAsFile();
