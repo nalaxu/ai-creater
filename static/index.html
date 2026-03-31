@@ -347,10 +347,10 @@
                                                 class="text-xs font-normal text-gray-400 ml-1">(图生图每张独立生成，裂变模式单图扩增多张)</span></span>
                                     </label>
                                     <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
-                                        @drop.prevent="onDrop"
+                                        @drop.prevent="onDrop" @paste.prevent="handlePaste"
                                         :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging}"
                                         class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[200px]"
-                                        @click="triggerFileInput">
+                                        @click="triggerFileInput" tabindex="0">
                                         <div class="space-y-3 text-center pointer-events-none">
                                             <div class="bg-white p-4 rounded-full shadow-sm inline-block">
                                                 <i :class="form.mode === 'video' ? 'fas fa-photo-video text-rose-500' : 'fas fa-cloud-upload-alt text-indigo-500'"
@@ -359,11 +359,11 @@
                                             <div class="text-base text-gray-700 font-medium">
                                                 <span
                                                     :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'">点击上传</span>
-                                                或拖拽文件到此区域
+                                                、拖拽或粘贴文件到此区域
                                             </div>
                                             <p class="text-xs text-gray-400" v-if="form.mode === 'video'">支持图片（JPG / PNG
-                                                / WEBP / BMP）和视频（MP4 / MOV）</p>
-                                            <p class="text-xs text-gray-400" v-else>支持批量选中 JPG / PNG / WEBP 格式图片</p>
+                                                / WEBP / BMP）和视频（MP4 / MOV）；可直接 Ctrl+V 粘贴</p>
+                                            <p class="text-xs text-gray-400" v-else>支持批量选中 JPG / PNG / WEBP 格式图片；可直接 Ctrl+V 粘贴</p>
                                         </div>
                                         <input id="file-upload" type="file" multiple class="hidden"
                                             @change="handleFileUpload"
@@ -1042,6 +1042,18 @@
                     if (event.dataTransfer.files) Array.from(event.dataTransfer.files).forEach(f => { if (isAllowedFile(f)) form.value.files.push(f); });
                 };
 
+                const handlePaste = (event) => {
+                    const items = event.clipboardData && event.clipboardData.items;
+                    if (!items) return;
+                    if (!['i2i', 'fission', 'convert', 'video'].includes(form.value.mode)) return;
+                    Array.from(items).forEach(item => {
+                        if (item.kind === 'file') {
+                            const file = item.getAsFile();
+                            if (file && isAllowedFile(file)) form.value.files.push(file);
+                        }
+                    });
+                };
+
                 const removeFile = (index) => {
                     const file = form.value.files[index];
                     if (objectUrls.value[file.name]) { URL.revokeObjectURL(objectUrls.value[file.name]); delete objectUrls.value[file.name]; }
@@ -1216,13 +1228,13 @@
                     }
                 };
 
-                onMounted(() => checkAuth());
-                onUnmounted(() => { if (pollInterval) clearInterval(pollInterval); removeAllFiles(); });
+                onMounted(() => { checkAuth(); document.addEventListener('paste', handlePaste); });
+                onUnmounted(() => { if (pollInterval) clearInterval(pollInterval); removeAllFiles(); document.removeEventListener('paste', handlePaste); });
 
                 return {
                     user, isLoggingIn, loginForm, currentTab, availableModels, form, templates,
                     showSaveTemplateModal, showTemplateManagerModal, newTemplate, isDragging, isSubmitting,
-                    isFetching, retryingJobs, retryingTasks, jobs, isSubmitDisabled, calculateTotalTasks, fileInput, triggerFileInput, handleFileUpload, onDrop,
+                    isFetching, retryingJobs, retryingTasks, jobs, isSubmitDisabled, calculateTotalTasks, fileInput, triggerFileInput, handleFileUpload, onDrop, handlePaste,
                     removeFile, removeAllFiles, getObjectURL, submitJob, fetchJobs, deleteJob, retryFailedTasks, retryTask, hasFailedResults, handleTemplateSelect,
                     openSaveModal, saveTemplate, editTemplate, deleteTemplate, handleLogin, handleLogout,
                     formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll,
