@@ -113,7 +113,7 @@ ALIYUN_QWEN_STRICT_MODELS = {"qwen-image-2.0-pro", "qwen-image-2.0-pro-2026-03-0
 
 
 def is_aliyun_model(model_id: str) -> bool:
-    return model_id.startswith("qwen") or model_id.startswith("wan")
+    return model_id.startswith("qwen") or model_id.startswith("wan") or model_id.startswith("qwen3-vl")
 
 
 def get_aliyun_rate_rule(model_id: str) -> Dict[str, float]:
@@ -182,6 +182,12 @@ def build_subtasks(mode: str, prompts: List[str], source_image_paths: Optional[L
     if mode == "video":
         return [make_subtask(prompts[0] if prompts else "", source_image_paths[0] if source_image_paths else None)]
 
+    # extract 模式：每张图片对应一个 pipeline 子任务，batch_size 控制每张图生成几张输出
+    if mode == "extract":
+        if source_image_paths:
+            return [make_subtask("", img_path) for img_path in source_image_paths]
+        return []
+
     subtasks = []
     for _ in range(batch_size):
         if mode in ["i2i", "fission", "convert"] and source_image_paths:
@@ -217,6 +223,7 @@ def normalize_job(job: Dict[str, Any]):
     job.setdefault("negative_prompt", "")
     job.setdefault("target_ratio", "")
     job.setdefault("video_params", {})
+    job.setdefault("batch_size", 1)
     job.setdefault("eta", None)
     if not job.get("subtasks"):
         subtasks = []
@@ -401,6 +408,35 @@ def get_provider_for_model(model_id: str) -> ImageProvider:
                 if m["prefix"] == "minimax": return MinimaxProvider()
                 if m["prefix"] == "doubao": return DoubaoProvider()
     return GeminiProvider() # Default fallback
+
+# ==========================================
+# 图案提取 - Qwen VL 视觉理解
+# ==========================================
+_PATTERN_EXTRACT_PROMPT = (
+    "Please look at the pattern or design printed/embroidered on this product. "
+    "Write a detailed English prompt describing only the pattern/design itself — "
+    "do NOT mention the product type, material, or shape. "
+    "Focus on: subject, style, colors, composition, texture, and mood of the pattern. "
+    "Reply with the prompt text only, no extra explanation."
+)
+
+async def extract_pattern_prompt(image_path: str) -> str:
+    vl_model = os.getenv("QWEN_VL_MODEL", "qwen3-vl-plus")
+    await aliyun_rate_limiter.wait(vl_model)
+    with open(image_path, "rb") as f:
+        b64_data = base64.b64encode(f.read()).decode("utf-8")
+    ext = os.path.splitext(image_path)[1].lower().lstrip(".").replace("jpg", "jpeg") or "jpeg"
+    messages = [{"role": "user", "content": [
+        {"image": f"data:image/{ext};base64,{b64_data}"},
+        {"text": _PATTERN_EXTRACT_PROMPT},
+    ]}]
+    rsp = await asyncio.to_thread(MultiModalConversation.call, model=vl_model, messages=messages)
+    if rsp.status_code != 200:
+        raise Exception(f"Qwen VL 图案提取失败: {rsp.message}")
+    for item in rsp.output.choices[0].message.content:
+        if "text" in item:
+            return item["text"].strip()
+    raise Exception("Qwen VL 未返回文字描述")
 
 # ==========================================
 # 万相视频生成 - DashScope OSS 文件上传
@@ -609,6 +645,7 @@ class JobQueue:
             "results": [], "created_at": time.time(), "eta": None,
             "template_name": template_name, "negative_prompt": negative_prompt,
             "target_ratio": target_ratio, "video_params": video_params or {},
+            "batch_size": batch_size,
             "subtasks": build_subtasks(mode, prompts, source_image_paths, batch_size)
         }
         refresh_job_progress(self.jobs[job_id])
@@ -659,6 +696,66 @@ async def process_queue():
         job["status"] = "processing"
         user_dir = f"users/{user}/outputs"
         os.makedirs(user_dir, exist_ok=True)
+
+        # ==========================================
+        # 图案提取生图模式 (Qwen VL + 图像模型)
+        # ==========================================
+        if job["mode"] == "extract":
+            batch_size = job.get("batch_size", 1)
+            provider = get_provider_for_model(model_id)
+            tasks = [t for t in job.get("subtasks", []) if t.get("status") == "pending"]
+
+            avg_time = 15.0
+            for i, subtask in enumerate(tasks):
+                start_time = time.time()
+                img_path = subtask.get("source_img")
+                subtask["attempts"] = subtask.get("attempts", 0) + 1
+                try:
+                    # 步骤 1：VL 提取图案描述
+                    extracted_prompt = await extract_pattern_prompt(img_path)
+
+                    # 步骤 2：使用提取的 prompt + 原图生成 batch_size 张图片
+                    all_images = []
+                    for j in range(batch_size):
+                        dl_base_name = re.sub(r'[\\/*?:"<>|]', "", f"extract_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{j+1}")
+                        imgs, _ = await run_with_retries(
+                            lambda p=extracted_prompt, b=dl_base_name: provider.generate(model_id, p, "", img_path, user_dir, b, user, target_ratio),
+                            model_id=model_id,
+                        )
+                        all_images.extend(imgs)
+                        if j < batch_size - 1:
+                            await asyncio.sleep(0.2)
+
+                    subtask["status"] = "success"
+                    upsert_task_result(job, subtask, {
+                        "prompt": extracted_prompt,
+                        "extracted_prompt": extracted_prompt,
+                        "source_img": os.path.basename(img_path).split("_", 1)[-1] if img_path else None,
+                        "images": all_images,
+                        "status": "success",
+                        "attempts": subtask["attempts"],
+                    })
+                except Exception as e:
+                    subtask["status"] = "error"
+                    upsert_task_result(job, subtask, {
+                        "prompt": "",
+                        "source_img": os.path.basename(img_path).split("_", 1)[-1] if img_path else None,
+                        "error": str(e),
+                        "status": "error",
+                        "attempts": subtask["attempts"],
+                    })
+
+                refresh_job_progress(job)
+                avg_time = (avg_time * i + (time.time() - start_time)) / (i + 1)
+                pending_count = sum(1 for t in job.get("subtasks", []) if t.get("status") == "pending")
+                job["eta"] = max(0, pending_count * avg_time)
+                job_queue.sync_user_jobs(user)
+
+            job["status"] = "completed"
+            job["eta"] = 0
+            job_queue.sync_user_jobs(user)
+            job_queue.queue.task_done()
+            continue
 
         # ==========================================
         # 视频生成模式 (万相 WAN)
@@ -833,6 +930,8 @@ async def create_job(
         prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
     elif mode == "convert" and not prompt_str:
         prompt_str = "保持原图主体结构和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
+    elif mode == "extract":
+        prompt_str = ""  # prompt 由 VL 模型自动生成，前端无需填写
     elif mode != "video" and not prompt_str:
         return {"error": "No prompt provided"}
     elif mode == "video" and not prompt_str:

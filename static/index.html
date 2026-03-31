@@ -172,6 +172,11 @@
                                         class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
                                         <i class="fas fa-crop-alt mr-2"></i>AI 尺寸重绘
                                     </button>
+                                    <button @click="form.mode = 'extract'"
+                                        :class="form.mode === 'extract' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:bg-gray-50'"
+                                        class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
+                                        <i class="fas fa-magic mr-2"></i>图案提取生图
+                                    </button>
                                     <button @click="form.mode = 'video'"
                                         :class="form.mode === 'video' ? 'bg-white text-rose-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'"
                                         class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
@@ -209,6 +214,9 @@
                                     </div>
                                     <p class="text-[11px] text-gray-400 mt-2"><i
                                             class="fas fa-info-circle mr-1"></i>模型列表可在后端的 .env 配置文件中自由增减。</p>
+                                    <p v-if="form.mode === 'extract'" class="text-[11px] text-indigo-400 mt-1">
+                                        <i class="fas fa-robot mr-1"></i>图案识别固定使用 VL 模型（通过后端 <code class="bg-indigo-50 px-1 rounded">QWEN_VL_MODEL</code> 环境变量配置，默认 qwen3-vl-plus），以上选择的模型用于最终生图。
+                                    </p>
                                 </div>
 
                                 <div v-show="form.mode === 'video'"
@@ -276,7 +284,7 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-6" v-show="form.mode !== 'video'">
+                                <div class="mb-6" v-show="form.mode !== 'video' && form.mode !== 'extract'">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         <i class="fas fa-crop-alt text-indigo-500 mr-1"></i>目标图片比例
                                         <span v-if="form.mode === 'convert'"
@@ -302,7 +310,7 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract'">
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="block text-sm font-semibold text-gray-700">
                                             <i class="fas fa-bookmark text-indigo-500 mr-1"></i>快捷加载提示模板 <span
@@ -337,18 +345,20 @@
                                     </div>
                                 </div>
 
-                                <div v-show="['i2i', 'fission', 'convert', 'video'].includes(form.mode)" class="mb-8">
+                                <div v-show="['i2i', 'fission', 'convert', 'video', 'extract'].includes(form.mode)" class="mb-8">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         <span v-if="form.mode === 'convert'">上传需要重绘比例的图片</span>
                                         <span v-else-if="form.mode === 'video'">参考素材上传 <span
                                                 class="text-xs font-normal text-rose-500 ml-1">(可选，最多 5 个文件，图片 ≤ 5 张，视频
                                                 ≤ 3 段)</span></span>
+                                        <span v-else-if="form.mode === 'extract'">产品图片上传 <span
+                                                class="text-xs font-normal text-indigo-400 ml-1">(AI 将自动识别图案并生成变体，每张图独立处理)</span></span>
                                         <span v-else>参考图片上传 <span
                                                 class="text-xs font-normal text-gray-400 ml-1">(图生图每张独立生成，裂变模式单图扩增多张)</span></span>
                                     </label>
                                     <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
                                         @drop.prevent="onDrop" @paste.prevent="handlePaste"
-                                        :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging}"
+                                        :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video', 'border-indigo-200 bg-indigo-50/30': !isDragging && form.mode === 'extract', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging && form.mode !== 'extract'}"
                                         class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[200px]"
                                         @click="triggerFileInput" tabindex="0">
                                         <div class="space-y-3 text-center pointer-events-none">
@@ -411,18 +421,28 @@
                                     </div>
                                 </div>
 
-                                <div v-show="form.mode === 'fission'"
-                                    class="mb-8 bg-emerald-50 p-5 rounded-xl border border-emerald-100">
-                                    <label class="block text-sm font-semibold text-emerald-800 mb-2">裂变数量 (单图生成张数):
-                                        <span class="text-emerald-600 font-bold text-lg ml-2">{{ form.batch_size
-                                            }}</span></label>
+                                <div v-show="form.mode === 'fission' || form.mode === 'extract'"
+                                    :class="form.mode === 'extract' ? 'bg-indigo-50 border-indigo-100' : 'bg-emerald-50 border-emerald-100'"
+                                    class="mb-8 p-5 rounded-xl border">
+                                    <label :class="form.mode === 'extract' ? 'text-indigo-800' : 'text-emerald-800'"
+                                        class="block text-sm font-semibold mb-2">
+                                        <span v-if="form.mode === 'extract'">每张图生成数量：</span>
+                                        <span v-else>裂变数量 (单图生成张数)：</span>
+                                        <span :class="form.mode === 'extract' ? 'text-indigo-600' : 'text-emerald-600'"
+                                            class="font-bold text-lg ml-2">{{ form.batch_size }}</span>
+                                    </label>
                                     <input type="range" v-model="form.batch_size" min="1" max="10"
-                                        class="w-full h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer">
-                                    <p class="text-xs text-emerald-600/80 mt-2"><i class="fas fa-info-circle"></i>
-                                        系统将基于每张上传的参考图，一次性生成 {{ form.batch_size }} 张风格相似的变体。</p>
+                                        :class="form.mode === 'extract' ? 'bg-indigo-200' : 'bg-emerald-200'"
+                                        class="w-full h-2 rounded-lg appearance-none cursor-pointer">
+                                    <p :class="form.mode === 'extract' ? 'text-indigo-600/80' : 'text-emerald-600/80'"
+                                        class="text-xs mt-2">
+                                        <i class="fas fa-info-circle"></i>
+                                        <span v-if="form.mode === 'extract'"> AI 识别图案后，将基于每张产品图自动生成 {{ form.batch_size }} 张变体图片。</span>
+                                        <span v-else> 系统将基于每张上传的参考图，一次性生成 {{ form.batch_size }} 张风格相似的变体。</span>
+                                    </p>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'extract'">
                                     <label
                                         class="flex justify-between items-center text-sm font-semibold text-gray-700 mb-2">
                                         <span>
@@ -444,7 +464,7 @@
                                     </p>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract'">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         反向提示词 <span class="text-xs font-normal text-gray-400 ml-1">(Negative Prompt:
                                             不希望出现的元素)</span>
@@ -454,24 +474,26 @@
                                         placeholder="例如：白边, 阴影, 变形, 裁剪, 局部特写..."></textarea>
                                 </div>
 
-                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : 'bg-gray-50 border-gray-100'"
+                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : 'bg-indigo-50/60 border-indigo-100'"
                                     class="flex items-center justify-between p-4 rounded-xl border">
                                     <div class="text-sm font-medium text-gray-500">
-                                        即将提交: <span :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'"
-                                            class="font-bold text-lg">{{
-                                            calculateTotalTasks() }}</span> 个任务
+                                        即将提交: <span class="text-indigo-600 font-bold text-lg" v-if="form.mode !== 'video'">{{
+                                            calculateTotalTasks() }}</span>
+                                        <span class="text-rose-600 font-bold text-lg" v-else>{{ calculateTotalTasks() }}</span>
+                                        个任务
                                     </div>
                                     <button @click="submitJob" :disabled="isSubmitDisabled"
                                         :class="form.mode === 'video' ? 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'"
                                         class="inline-flex items-center px-8 py-3.5 border border-transparent text-base font-bold rounded-xl shadow-lg text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5">
                                         <i class="fas fa-paper-plane mr-2"
-                                            v-if="!isSubmitting && !['convert','video'].includes(form.mode)"></i>
+                                            v-if="!isSubmitting && !['convert','video','extract'].includes(form.mode)"></i>
                                         <i class="fas fa-crop-alt mr-2"
                                             v-if="!isSubmitting && form.mode === 'convert'"></i>
+                                        <i class="fas fa-magic mr-2"
+                                            v-if="!isSubmitting && form.mode === 'extract'"></i>
                                         <i class="fas fa-film mr-2" v-if="!isSubmitting && form.mode === 'video'"></i>
                                         <i class="fas fa-spinner fa-spin mr-2 text-lg" v-if="isSubmitting"></i>
-                                        {{ isSubmitting ? '处理中...' : (form.mode === 'convert' ? '提交 AI 重绘' : form.mode
-                                        === 'video' ? '提交视频生成' : '提交生成') }}
+                                        {{ isSubmitting ? '处理中...' : (form.mode === 'convert' ? '提交 AI 重绘' : form.mode === 'extract' ? '提交图案提取' : form.mode === 'video' ? '提交视频生成' : '提交生成') }}
                                     </button>
                                 </div>
                             </div>
@@ -515,11 +537,10 @@
                                     <div class="h-4 w-px bg-gray-300"></div>
                                     <span class="text-sm font-bold text-gray-700 flex items-center">
                                         <span class="bg-white p-1 rounded inline-flex shadow-sm mr-2">
-                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : job.mode === 'video' ? 'fas fa-film text-rose-500' : 'fas fa-sitemap text-emerald-500'"
+                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : job.mode === 'video' ? 'fas fa-film text-rose-500' : job.mode === 'extract' ? 'fas fa-magic text-indigo-500' : 'fas fa-sitemap text-emerald-500'"
                                                 class="w-4 text-center"></i>
                                         </span>
-                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode ===
-                                        'convert' ? 'AI尺寸重绘' : job.mode === 'video' ? '视频生成任务' : '图片裂变任务' }}
+                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode === 'convert' ? 'AI尺寸重绘' : job.mode === 'video' ? '视频生成任务' : job.mode === 'extract' ? '图案提取生图' : '图片裂变任务' }}
                                     </span>
                                     <span class="text-xs text-gray-500 ml-2" v-if="job.model_id">
                                         [<i class="fas fa-microchip mr-1"></i>{{ job.model_id }}]
@@ -596,6 +617,10 @@
                                         <div v-for="(res, idx) in job.results" :key="idx"
                                             class="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm transition-all relative flex flex-col hover:border-indigo-300 hover:shadow-md">
                                             <div class="mb-3 border-b border-gray-50 pb-3">
+                                                <div v-if="job.mode === 'extract'"
+                                                    class="mb-2 text-[11px] font-semibold text-indigo-500 bg-indigo-50 inline-flex items-center px-2 py-0.5 rounded border border-indigo-100">
+                                                    <i class="fas fa-magic mr-1"></i>AI 提取的图案描述
+                                                </div>
                                                 <div
                                                     class="text-sm font-bold text-gray-800 line-clamp-2 leading-relaxed tracking-wide">
                                                     "{{ res.prompt }}"</div>
@@ -865,6 +890,7 @@
 
                 const calculateTotalTasks = () => {
                     if (form.value.mode === 'video') return 1;
+                    if (form.value.mode === 'extract') return form.value.files.length > 0 ? form.value.files.length : 1;
                     let fileCount = ['i2i', 'fission', 'convert'].includes(form.value.mode) && form.value.files.length > 0 ? form.value.files.length : 1;
                     let bSize = form.value.mode === 'fission' ? form.value.batch_size : 1;
                     return fileCount * bSize;
@@ -878,6 +904,7 @@
                     if (form.value.mode === 'video') {
                         return !form.value.prompts.trim();
                     }
+                    if (form.value.mode === 'extract') return form.value.files.length === 0;
                     if (form.value.mode !== 'fission' && !form.value.prompts.trim()) return true;
                     if (['i2i', 'fission'].includes(form.value.mode) && form.value.files.length === 0) return true;
                     return false;
@@ -1075,11 +1102,11 @@
                         alert("请选择目标尺寸比例");
                         return;
                     }
-                    if (['i2i', 'fission', 'convert'].includes(form.value.mode) && form.value.files.length === 0) {
+                    if (['i2i', 'fission', 'convert', 'extract'].includes(form.value.mode) && form.value.files.length === 0) {
                         alert("请至少上传一张参考图片");
                         return;
                     }
-                    if (form.value.mode !== 'convert' && form.value.mode !== 'fission' && !form.value.prompts.trim()) {
+                    if (form.value.mode !== 'convert' && form.value.mode !== 'fission' && form.value.mode !== 'extract' && !form.value.prompts.trim()) {
                         return;
                     }
 
@@ -1095,7 +1122,7 @@
                     formData.append('negative_prompt', form.value.negative_prompt);
                     formData.append('mode', form.value.mode);
                     formData.append('model_id', form.value.model_id);
-                    formData.append('batch_size', form.value.mode === 'fission' ? form.value.batch_size : 1);
+                    formData.append('batch_size', ['fission', 'extract'].includes(form.value.mode) ? form.value.batch_size : 1);
                     formData.append('target_ratio', form.value.target_ratio);
 
                     if (form.value.mode === 'video') {
@@ -1111,7 +1138,7 @@
                     if (tplName.includes(':')) tplName = tplName.split(':')[1];
                     formData.append('template_name', tplName);
 
-                    if (['i2i', 'fission', 'convert', 'video'].includes(form.value.mode)) {
+                    if (['i2i', 'fission', 'convert', 'video', 'extract'].includes(form.value.mode)) {
                         form.value.files.forEach(file => formData.append('images', file));
                     }
 
