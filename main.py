@@ -113,6 +113,116 @@ for env_key, prov_name, prefix, model_type in [
 
 ALIYUN_QWEN_STRICT_MODELS = {"qwen-image-2.0-pro", "qwen-image-2.0-pro-2026-03-03"}
 
+# ==========================================
+# 积分计费系统 (Credit System)
+# 1元 = 10积分
+# ==========================================
+CREDITS_PER_YUAN = 10
+
+# 图像生成模型单价（元/张，中国内地）
+_IMAGE_PRICE_PER_IMAGE: Dict[str, float] = {
+    "qwen-image-2.0-pro": 0.5,
+    "qwen-image-2.0-pro-2026-03-03": 0.5,
+    "qwen-image-2.0": 0.2,
+    "qwen-image-2.0-2026-03-03": 0.2,
+    "qwen-image-max": 0.5,
+    "qwen-image-max-2025-12-30": 0.5,
+    "qwen-image-plus": 0.2,
+    "qwen-image-plus-2026-01-09": 0.2,
+    "qwen-image": 0.25,
+    "qwen-image-edit-max": 0.5,
+    "qwen-image-edit-max-2026-01-16": 0.5,
+    "qwen-image-edit-plus": 0.2,
+    "qwen-image-edit-plus-2025-12-15": 0.2,
+    "qwen-image-edit-plus-2025-10-30": 0.2,
+    "qwen-image-edit": 0.3,
+}
+_DEFAULT_IMAGE_PRICE = 0.5  # 未知图像模型默认价格（元/张）
+
+# VL 模型单价（元/百万 Token，中国内地）
+_VL_TOKEN_PRICE: Dict[str, Dict[str, float]] = {
+    "qwen3-vl-plus": {"input": 1.0, "output": 10.0},
+    "qwen3-vl-flash": {"input": 0.15, "output": 1.5},
+    "qwen-vl-max": {"input": 3.0, "output": 9.0},
+    "qwen-vl-plus": {"input": 1.5, "output": 4.5},
+}
+_VL_DEFAULT_PRICE = {"input": 1.0, "output": 10.0}
+_VL_EST_INPUT_TOKENS = 3000   # 图像+提示词预估 token 数
+_VL_EST_OUTPUT_TOKENS = 500   # 输出描述预估 token 数
+
+# 万相视频模型单价（元/秒，720P / 默认档位）
+_VIDEO_PRICE_PER_SECOND: Dict[str, float] = {
+    "wan2.6-t2v": 0.6,
+    "wan2.6-t2v-us": 0.733924,
+    "wan2.5-t2v-preview": 0.6,
+    "wan2.2-t2v-plus": 0.14,
+    "wanx2.1-t2v-turbo": 0.24,
+    "wanx2.1-t2v-plus": 0.70,
+    "wan2.6-i2v-flash": 0.3,
+    "wan2.6-i2v-plus": 0.6,
+    "wan2.6-i2v-turbo": 0.3,
+    "wanx2.1-i2v-turbo": 0.24,
+    "wanx2.1-i2v-plus": 0.70,
+}
+_DEFAULT_VIDEO_PRICE_PER_SECOND = 0.5  # 未知视频模型默认价格（元/秒）
+
+_credit_lock = asyncio.Lock()
+
+
+def get_image_credit_per_image(model_id: str) -> float:
+    """获取图像模型每张图片的积分成本（积分）"""
+    price = _IMAGE_PRICE_PER_IMAGE.get(model_id, _DEFAULT_IMAGE_PRICE)
+    return round(price * CREDITS_PER_YUAN, 4)
+
+
+def get_vl_credit_per_call(model_id: str) -> float:
+    """估算 VL 模型每次调用的积分成本（积分）"""
+    prices = _VL_TOKEN_PRICE.get(model_id, _VL_DEFAULT_PRICE)
+    cost_yuan = (
+        _VL_EST_INPUT_TOKENS / 1_000_000 * prices["input"] +
+        _VL_EST_OUTPUT_TOKENS / 1_000_000 * prices["output"]
+    )
+    return round(cost_yuan * CREDITS_PER_YUAN, 4)
+
+
+def get_video_credit_per_second(model_id: str) -> float:
+    """获取视频模型每秒的积分成本（积分）"""
+    price = _VIDEO_PRICE_PER_SECOND.get(model_id, _DEFAULT_VIDEO_PRICE_PER_SECOND)
+    return round(price * CREDITS_PER_YUAN, 4)
+
+
+def estimate_job_credits(model_id: str, mode: str, subtasks: List[Dict], video_params: Optional[Dict] = None, batch_size: int = 1) -> float:
+    """估算整个任务的积分消耗（任务提交前调用）"""
+    if not is_aliyun_model(model_id):
+        return 0.0
+    if mode == "video":
+        duration = int((video_params or {}).get("duration", 5))
+        return round(get_video_credit_per_second(model_id) * duration, 4)
+    if mode == "extract":
+        vl_model = os.getenv("QWEN_VL_MODEL", "qwen3-vl-plus")
+        vl_credit = get_vl_credit_per_call(vl_model)
+        img_credit = get_image_credit_per_image(model_id)
+        return round(len(subtasks) * (vl_credit + batch_size * img_credit), 4)
+    # t2i / i2i / fission / convert：每个 subtask 生成 1 张
+    return round(len(subtasks) * get_image_credit_per_image(model_id), 4)
+
+
+def get_user_credit(username: str) -> float:
+    """获取用户当前积分"""
+    return raw_config.get("users", {}).get(username, {}).get("credit", 0.0)
+
+
+async def deduct_credits(username: str, amount: float):
+    """扣除用户积分并持久化至 config.json"""
+    if amount <= 0:
+        return
+    async with _credit_lock:
+        users = raw_config.setdefault("users", {})
+        user_cfg = users.setdefault(username, {})
+        user_cfg["credit"] = round(user_cfg.get("credit", 0) - amount, 4)
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(raw_config, f, ensure_ascii=False, indent=4)
+
 
 def is_aliyun_model(model_id: str) -> bool:
     return model_id.startswith("qwen") or model_id.startswith("wan") or model_id.startswith("qwen3-vl")
@@ -641,6 +751,8 @@ class JobQueue:
 
     async def add_job(self, user, mode, prompts, source_image_paths=None, template_name="", model_id="", negative_prompt="", batch_size=1, target_ratio="", video_params=None):
         job_id = str(uuid.uuid4())
+        subtasks = build_subtasks(mode, prompts, source_image_paths, batch_size)
+        estimated_credits = estimate_job_credits(model_id, mode, subtasks, video_params, batch_size)
         self.jobs[job_id] = {
             "id": job_id, "user": user, "mode": mode, "model_id": model_id,
             "status": "queued", "total": 0, "completed": 0, "failed": 0,
@@ -648,7 +760,8 @@ class JobQueue:
             "template_name": template_name, "negative_prompt": negative_prompt,
             "target_ratio": target_ratio, "video_params": video_params or {},
             "batch_size": batch_size,
-            "subtasks": build_subtasks(mode, prompts, source_image_paths, batch_size)
+            "subtasks": subtasks,
+            "estimated_credits": estimated_credits,
         }
         refresh_job_progress(self.jobs[job_id])
         self.sync_user_jobs(user)
@@ -732,6 +845,11 @@ async def process_queue():
                                 await asyncio.sleep(0.2)
 
                         subtask["status"] = "success"
+                        vl_model = os.getenv("QWEN_VL_MODEL", "qwen3-vl-plus")
+                        credit_cost = round(
+                            get_vl_credit_per_call(vl_model) + len(all_images) * get_image_credit_per_image(model_id), 4
+                        )
+                        await deduct_credits(user, credit_cost)
                         upsert_task_result(job, subtask, {
                             "prompt": extracted_prompt,
                             "extracted_prompt": extracted_prompt,
@@ -739,6 +857,7 @@ async def process_queue():
                             "images": all_images,
                             "status": "success",
                             "attempts": subtask["attempts"],
+                            "credit_cost": credit_cost,
                         })
                     except Exception as e:
                         subtask["status"] = "error"
@@ -799,7 +918,10 @@ async def process_queue():
                     model_id=model_id,
                 )
                 subtask["status"] = "success"
-                upsert_task_result(job, subtask, {"prompt": prompt, "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None, "videos": videos, "images": [], "status": "success", "attempts": subtask["attempts"]})
+                duration = int(vp.get("duration", 5))
+                credit_cost = round(get_video_credit_per_second(model_id) * duration, 4)
+                await deduct_credits(user, credit_cost)
+                upsert_task_result(job, subtask, {"prompt": prompt, "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None, "videos": videos, "images": [], "status": "success", "attempts": subtask["attempts"], "credit_cost": credit_cost})
             except Exception as e:
                 subtask["status"] = "error"
                 upsert_task_result(job, subtask, {"prompt": prompt, "source_img": os.path.basename(subtask["source_img"]).split('_', 1)[-1] if subtask.get("source_img") else None, "error": str(e), "status": "error", "attempts": subtask["attempts"]})
@@ -833,6 +955,8 @@ async def process_queue():
                         model_id=model_id,
                     )
                     subtask["status"] = "success"
+                    credit_cost = round(len(generated_images) * get_image_credit_per_image(model_id), 4)
+                    await deduct_credits(user, credit_cost)
                     upsert_task_result(job, subtask, {
                         "prompt": prompt,
                         "source_img": os.path.basename(img_path).split('_', 1)[-1] if img_path else None,
@@ -840,6 +964,7 @@ async def process_queue():
                         "images": generated_images,
                         "status": "success",
                         "attempts": subtask["attempts"],
+                        "credit_cost": credit_cost,
                     })
                 except Exception as e:
                     subtask["status"] = "error"
@@ -883,6 +1008,23 @@ def login(username: str = Form(...), password: str = Form(...)):
 
 @app.get("/api/me")
 def get_me(curr: dict = Depends(get_current_user)): return curr
+
+@app.get("/api/credit")
+def get_credit(curr: dict = Depends(get_current_user)):
+    return {"credit": get_user_credit(curr["username"])}
+
+@app.post("/api/credit")
+async def set_credit(request: Request, curr: dict = Depends(get_current_user)):
+    if not curr.get("is_admin"):
+        return JSONResponse(status_code=403, content={"error": "仅管理员可操作"})
+    data = await request.json()
+    target_user = data.get("username", curr["username"])
+    amount = float(data.get("credit", 0))
+    async with _credit_lock:
+        raw_config.setdefault("users", {}).setdefault(target_user, {})["credit"] = round(amount, 4)
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(raw_config, f, ensure_ascii=False, indent=4)
+    return {"username": target_user, "credit": round(amount, 4)}
 @app.post("/api/logout")
 def logout(token: str = Depends(oauth2_scheme)):
     if token in SESSIONS: del SESSIONS[token]

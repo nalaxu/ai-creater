@@ -105,7 +105,24 @@
                         <i class="fas fa-tasks w-6 text-lg"></i> 任务队列
                     </a>
                 </nav>
-                <div class="p-4 border-t border-gray-100">
+                <div class="p-4 border-t border-gray-100 space-y-2">
+                    <!-- 积分余额 -->
+                    <div v-if="userCredit !== null" class="px-4 py-2.5 rounded-lg"
+                        :class="userCredit < 5 ? 'bg-red-50 border border-red-200' : 'bg-indigo-50'">
+                        <div class="text-[10px] font-bold uppercase tracking-widest"
+                            :class="userCredit < 5 ? 'text-red-400' : 'text-indigo-400'">
+                            <i class="fas fa-coins mr-1"></i>积分余额
+                        </div>
+                        <div class="text-xl font-black mt-0.5"
+                            :class="userCredit < 5 ? 'text-red-600' : 'text-indigo-700'">
+                            {{ userCredit.toFixed(2) }}
+                            <span class="text-xs font-normal ml-1 opacity-60">分</span>
+                        </div>
+                        <div v-if="userCredit < 5" class="text-[10px] text-red-500 mt-0.5">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>余额不足，请充值
+                        </div>
+                    </div>
+                    <!-- 用户信息 -->
                     <div class="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg">
                         <div class="flex items-center space-x-2 truncate">
                             <div
@@ -474,13 +491,24 @@
                                         placeholder="例如：白边, 阴影, 变形, 裁剪, 局部特写..."></textarea>
                                 </div>
 
-                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : 'bg-indigo-50/60 border-indigo-100'"
-                                    class="flex items-center justify-between p-4 rounded-xl border">
-                                    <div class="text-sm font-medium text-gray-500">
-                                        即将提交: <span class="text-indigo-600 font-bold text-lg" v-if="form.mode !== 'video'">{{
-                                            calculateTotalTasks() }}</span>
-                                        <span class="text-rose-600 font-bold text-lg" v-else>{{ calculateTotalTasks() }}</span>
-                                        个任务
+                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : (isAliyunModel(form.model_id) && userCredit !== null && userCredit < estimateCredits() ? 'bg-red-50 border-red-200' : 'bg-indigo-50/60 border-indigo-100')"
+                                    class="flex items-center justify-between p-4 rounded-xl border flex-wrap gap-3">
+                                    <div class="text-sm font-medium text-gray-500 flex flex-col gap-1">
+                                        <div>
+                                            即将提交: <span class="font-bold text-lg" :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'">{{
+                                                calculateTotalTasks() }}</span>
+                                            个任务
+                                            <!-- 阿里云模型积分预估 -->
+                                            <span v-if="isAliyunModel(form.model_id)" class="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full"
+                                                :class="userCredit !== null && userCredit < estimateCredits() ? 'bg-red-100 text-red-600 border border-red-200' : 'bg-amber-50 text-amber-700 border border-amber-200'">
+                                                <i class="fas fa-coins mr-1"></i>预估消耗 {{ estimateCredits().toFixed(2) }} 积分
+                                            </span>
+                                        </div>
+                                        <div v-if="isAliyunModel(form.model_id) && userCredit !== null && userCredit < estimateCredits()"
+                                            class="text-xs text-red-500 font-semibold flex items-center gap-1">
+                                            <i class="fas fa-exclamation-triangle"></i>
+                                            积分余额不足（当前 {{ userCredit.toFixed(2) }} 分），无法提交任务
+                                        </div>
                                     </div>
                                     <button @click="submitJob" :disabled="isSubmitDisabled"
                                         :class="form.mode === 'video' ? 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'"
@@ -549,6 +577,17 @@
                                         class="text-xs bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-0.5 rounded ml-2"
                                         v-if="job.target_ratio">
                                         <i class="fas fa-crop-alt mr-1"></i>{{ job.target_ratio }}
+                                    </span>
+                                    <!-- 积分消耗 -->
+                                    <span v-if="job.estimated_credits > 0"
+                                        class="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded ml-2 flex items-center gap-1">
+                                        <i class="fas fa-coins"></i>
+                                        <span v-if="job.status === 'completed'">
+                                            实耗 {{ (job.results || []).reduce((s, r) => s + (r.credit_cost || 0), 0).toFixed(2) }} 分
+                                        </span>
+                                        <span v-else>
+                                            预估 {{ job.estimated_credits.toFixed(2) }} 分
+                                        </span>
                                     </span>
                                 </div>
                                 <div class="flex items-center space-x-4">
@@ -639,6 +678,10 @@
                                                     class="mt-2 text-xs text-gray-500 truncate bg-gray-50 px-2 py-1 rounded inline-block max-w-full">
                                                     <i class="fas fa-image mr-1.5 text-indigo-400"></i>源: {{
                                                     res.source_img }}
+                                                </div>
+                                                <div v-if="res.credit_cost > 0"
+                                                    class="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 px-2 py-1 rounded inline-block">
+                                                    <i class="fas fa-coins mr-1"></i>消耗 {{ res.credit_cost.toFixed(4) }} 积分
                                                 </div>
                                             </div>
 
@@ -780,9 +823,21 @@
 
                 <!-- 子任务列表（可滚动） -->
                 <div class="flex-1 overflow-y-auto px-6 py-5 custom-scrollbar">
-                    <p class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">
-                        子任务 · 共 {{ (jobDetailModal.subtasks || []).length }} 个
-                    </p>
+                    <div class="flex items-center justify-between mb-3">
+                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                            子任务 · 共 {{ (jobDetailModal.subtasks || []).length }} 个
+                        </p>
+                        <span v-if="jobDetailModal.estimated_credits > 0"
+                            class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                            <i class="fas fa-coins mr-1"></i>
+                            <template v-if="jobDetailModal.status === 'completed'">
+                                实耗 {{ (jobDetailModal.results || []).reduce((s, r) => s + (r.credit_cost || 0), 0).toFixed(4) }} 积分
+                            </template>
+                            <template v-else>
+                                预估 {{ jobDetailModal.estimated_credits.toFixed(2) }} 积分
+                            </template>
+                        </span>
+                    </div>
                     <div class="space-y-3">
                         <div v-for="(st, idx) in (jobDetailModal.subtasks || [])" :key="st.id"
                             class="bg-gray-50 rounded-xl border border-gray-100 p-4 hover:border-indigo-200 transition-colors">
@@ -833,10 +888,14 @@
                                     </div>
                                 </div>
 
-                                <!-- 尝试次数 -->
-                                <div class="text-xs text-gray-400 text-right shrink-0">
+                                <!-- 尝试次数 + 积分消耗 -->
+                                <div class="text-xs text-gray-400 text-right shrink-0 flex flex-col gap-1 items-end">
                                     <span class="bg-white border border-gray-200 rounded-md px-2 py-1 font-medium">
                                         尝试 {{ st.attempts }} 次
+                                    </span>
+                                    <span v-if="getSubtaskResult(jobDetailModal, st.id) && getSubtaskResult(jobDetailModal, st.id).credit_cost > 0"
+                                        class="bg-amber-50 border border-amber-200 text-amber-700 rounded-md px-2 py-1 font-medium">
+                                        <i class="fas fa-coins mr-1"></i>{{ getSubtaskResult(jobDetailModal, st.id).credit_cost.toFixed(4) }} 分
                                     </span>
                                 </div>
                             </div>
@@ -999,8 +1058,43 @@
         createApp({
             setup() {
                 const user = ref(null);
+                const userCredit = ref(null);
                 const isLoggingIn = ref(false);
                 const loginForm = ref({ username: '', password: '' });
+
+                // ── 积分计费前端估算（与后端 estimate_job_credits 保持一致） ──
+                const _CREDITS_PER_YUAN = 10;
+                const _IMAGE_PRICE = { 'qwen-image-2.0-pro': 0.5, 'qwen-image-2.0-pro-2026-03-03': 0.5, 'qwen-image-2.0': 0.2, 'qwen-image-2.0-2026-03-03': 0.2, 'qwen-image-max': 0.5, 'qwen-image-max-2025-12-30': 0.5, 'qwen-image-plus': 0.2, 'qwen-image-plus-2026-01-09': 0.2, 'qwen-image': 0.25, 'qwen-image-edit-max': 0.5, 'qwen-image-edit-max-2026-01-16': 0.5, 'qwen-image-edit-plus': 0.2, 'qwen-image-edit': 0.3 };
+                const _VIDEO_PRICE = { 'wan2.6-t2v': 0.6, 'wan2.5-t2v-preview': 0.6, 'wan2.2-t2v-plus': 0.14, 'wanx2.1-t2v-turbo': 0.24, 'wanx2.1-t2v-plus': 0.70, 'wan2.6-i2v-flash': 0.3, 'wan2.6-i2v-plus': 0.6, 'wan2.6-i2v-turbo': 0.3, 'wanx2.1-i2v-turbo': 0.24, 'wanx2.1-i2v-plus': 0.70 };
+                const _VL_PRICE = { input: 1.0, output: 10.0 };
+                const _VL_EST_INPUT = 3000, _VL_EST_OUTPUT = 500;
+
+                const isAliyunModel = (id) => id && (id.startsWith('qwen') || id.startsWith('wan'));
+
+                const estimateCredits = () => {
+                    const modelId = form.value.model_id;
+                    if (!isAliyunModel(modelId)) return 0;
+                    const mode = form.value.mode;
+                    if (mode === 'video') {
+                        const duration = form.value.videoParams.duration || 5;
+                        return Math.round((_VIDEO_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN * duration * 10000) / 10000;
+                    }
+                    if (mode === 'extract') {
+                        const imgCount = form.value.files.length || 1;
+                        const batchSize = form.value.batch_size || 1;
+                        const vlCost = (_VL_EST_INPUT / 1e6 * _VL_PRICE.input + _VL_EST_OUTPUT / 1e6 * _VL_PRICE.output) * _CREDITS_PER_YUAN;
+                        const imgCost = (_IMAGE_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN;
+                        return Math.round(imgCount * (vlCost + batchSize * imgCost) * 10000) / 10000;
+                    }
+                    return Math.round(calculateTotalTasks() * (_IMAGE_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN * 10000) / 10000;
+                };
+
+                const fetchCredit = async () => {
+                    try {
+                        const res = await authFetch('/api/credit');
+                        if (res.ok) { const d = await res.json(); userCredit.value = d.credit; }
+                    } catch (e) { }
+                };
 
                 const currentTab = ref('create');
                 const availableModels = ref([]);
@@ -1044,14 +1138,17 @@
                 const isSubmitDisabled = computed(() => {
                     if (isSubmitting.value) return true;
                     if (form.value.mode === 'convert') {
-                        return form.value.files.length === 0 || !form.value.target_ratio;
+                        if (form.value.files.length === 0 || !form.value.target_ratio) return true;
+                    } else if (form.value.mode === 'video') {
+                        if (!form.value.prompts.trim()) return true;
+                    } else if (form.value.mode === 'extract') {
+                        if (form.value.files.length === 0) return true;
+                    } else {
+                        if (form.value.mode !== 'fission' && !form.value.prompts.trim()) return true;
+                        if (['i2i', 'fission'].includes(form.value.mode) && form.value.files.length === 0) return true;
                     }
-                    if (form.value.mode === 'video') {
-                        return !form.value.prompts.trim();
-                    }
-                    if (form.value.mode === 'extract') return form.value.files.length === 0;
-                    if (form.value.mode !== 'fission' && !form.value.prompts.trim()) return true;
-                    if (['i2i', 'fission'].includes(form.value.mode) && form.value.files.length === 0) return true;
+                    // 积分不足时禁止提交（仅阿里云模型）
+                    if (isAliyunModel(form.value.model_id) && userCredit.value !== null && userCredit.value < estimateCredits()) return true;
                     return false;
                 });
 
@@ -1104,14 +1201,14 @@
                 const handleLogout = async () => {
                     try { await authFetch('/api/logout', { method: 'POST' }); } catch (e) { }
                     localStorage.removeItem('auth_token');
-                    user.value = null; jobs.value = []; templates.value = { public: [], private: [] };
+                    user.value = null; userCredit.value = null; jobs.value = []; templates.value = { public: [], private: [] };
                 };
 
                 const initializeUserSpace = () => {
-                    fetchModels(); fetchTemplates(); fetchJobs();
+                    fetchModels(); fetchTemplates(); fetchJobs(); fetchCredit();
                     if (!pollInterval) {
                         pollInterval = setInterval(() => {
-                            if (currentTab.value === 'jobs' && user.value) fetchJobs();
+                            if (user.value) { fetchCredit(); if (currentTab.value === 'jobs') fetchJobs(); }
                         }, 3000);
                     }
                 };
@@ -1303,7 +1400,7 @@
                     isFetching.value = true;
                     try {
                         const response = await authFetch('/api/jobs');
-                        if (response.ok) jobs.value = await response.json();
+                        if (response.ok) { jobs.value = await response.json(); fetchCredit(); }
                     } catch (error) { console.error('Fetch jobs error:', error); }
                     finally { isFetching.value = false; }
                 };
@@ -1411,13 +1508,13 @@
                 onUnmounted(() => { if (pollInterval) clearInterval(pollInterval); removeAllFiles(); document.removeEventListener('paste', handlePaste); });
 
                 return {
-                    user, isLoggingIn, loginForm, currentTab, availableModels, form, templates,
+                    user, userCredit, isLoggingIn, loginForm, currentTab, availableModels, form, templates,
                     showSaveTemplateModal, showTemplateManagerModal, newTemplate, isDragging, isSubmitting,
                     isFetching, retryingJobs, retryingTasks, jobs, isSubmitDisabled, calculateTotalTasks, fileInput, triggerFileInput, handleFileUpload, onDrop, handlePaste,
                     removeFile, removeAllFiles, getObjectURL, submitJob, fetchJobs, deleteJob, retryFailedTasks, retryTask, hasFailedResults, handleTemplateSelect,
                     openSaveModal, saveTemplate, editTemplate, deleteTemplate, handleLogin, handleLogout,
                     formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll,
-                    isVideoFile, filteredModels,
+                    isVideoFile, filteredModels, estimateCredits, isAliyunModel,
                     jobDetailModal, openJobDetail, getModeLabel, getSubtaskResult
                 };
             }
