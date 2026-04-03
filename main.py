@@ -10,12 +10,13 @@ import requests
 import io
 import zipfile
 import dashscope
-from dashscope import MultiModalConversation
+from dashscope import MultiModalConversation, Generation
 from dotenv import load_dotenv
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 load_dotenv()
+dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -166,6 +167,16 @@ _VIDEO_PRICE_PER_SECOND: Dict[str, float] = {
 }
 _DEFAULT_VIDEO_PRICE_PER_SECOND = 0.5  # 未知视频模型默认价格（元/秒）
 
+# 文本推理模型单价（元/百万 Token，中国内地）
+_TEXT_TOKEN_PRICE: Dict[str, Dict[str, float]] = {
+    "qwen3-235b-a22b": {"input": 1.0, "output": 8.0},
+    "qwen3-30b-a3b": {"input": 0.22, "output": 0.88},
+    "qwen3-8b": {"input": 0.05, "output": 0.2},
+}
+_TEXT_DEFAULT_PRICE = {"input": 1.0, "output": 8.0}
+_TEXT_EST_INPUT_TOKENS = 400   # 场景生成 prompt 预估 token 数
+_TEXT_EST_OUTPUT_TOKENS = 400  # 输出场景描述预估 token 数
+
 _credit_lock = asyncio.Lock()
 
 
@@ -181,6 +192,16 @@ def get_vl_credit_per_call(model_id: str) -> float:
     cost_yuan = (
         _VL_EST_INPUT_TOKENS / 1_000_000 * prices["input"] +
         _VL_EST_OUTPUT_TOKENS / 1_000_000 * prices["output"]
+    )
+    return round(cost_yuan * CREDITS_PER_YUAN, 4)
+
+
+def get_text_credit_per_call(model_id: str) -> float:
+    """估算文本推理模型每次调用的积分成本（积分）"""
+    prices = _TEXT_TOKEN_PRICE.get(model_id, _TEXT_DEFAULT_PRICE)
+    cost_yuan = (
+        _TEXT_EST_INPUT_TOKENS / 1_000_000 * prices["input"] +
+        _TEXT_EST_OUTPUT_TOKENS / 1_000_000 * prices["output"]
     )
     return round(cost_yuan * CREDITS_PER_YUAN, 4)
 
@@ -203,6 +224,9 @@ def estimate_job_credits(model_id: str, mode: str, subtasks: List[Dict], video_p
         vl_credit = get_vl_credit_per_call(vl_model)
         img_credit = get_image_credit_per_image(model_id)
         return round(len(subtasks) * (vl_credit + batch_size * img_credit), 4)
+    if mode == "ecommerce":
+        # VL 和文本模型费用在 step API 中实时扣除，此处只估算图像生成费用
+        return round(len(subtasks) * get_image_credit_per_image(model_id), 4)
     # t2i / i2i / fission / convert：每个 subtask 生成 1 张
     return round(len(subtasks) * get_image_credit_per_image(model_id), 4)
 
@@ -293,6 +317,10 @@ def make_subtask(prompt: str, source_img: Optional[str] = None) -> Dict[str, Any
 def build_subtasks(mode: str, prompts: List[str], source_image_paths: Optional[List[str]], batch_size: int) -> List[Dict[str, Any]]:
     if mode == "video":
         return [make_subtask(prompts[0] if prompts else "", source_image_paths[0] if source_image_paths else None)]
+
+    # ecommerce 模式：prompts 与 source_image_paths 一一对应，逐对创建子任务
+    if mode == "ecommerce":
+        return [make_subtask(p, img) for p, img in zip(prompts, source_image_paths or [])]
 
     # extract 模式：每张图片对应一个 pipeline 子任务，batch_size 控制每张图生成几张输出
     if mode == "extract":
@@ -549,6 +577,127 @@ async def extract_pattern_prompt(image_path: str) -> str:
         if "text" in item:
             return item["text"].strip()
     raise Exception("Qwen VL 未返回文字描述")
+
+# ==========================================
+# 电商场景生图 - 三步 Pipeline
+# ==========================================
+_PRODUCT_UNDERSTAND_PROMPT = (
+    "Analyze this product image for an e-commerce listing. "
+    "Provide a detailed English description including: product category and type, "
+    "primary colors and materials/textures, shape and key visual characteristics, "
+    "notable design elements or features, any visible branding or text. "
+    "Focus ONLY on the product itself — do not describe the background or setting. "
+    "Reply with the description only, no extra explanation."
+)
+
+_SCENE_GENERATE_SYSTEM_PROMPT = (
+    "You are an expert e-commerce product photographer and creative director. "
+    "Generate diverse, practical photography scene descriptions for product listings. "
+    "Each scene should be realistic, enhance the product's visual appeal, and suit different buyer contexts."
+)
+
+
+def _build_scene_prompt(product_description: str, scene_count: int) -> str:
+    return (
+        f"Based on this product description, generate {scene_count} distinct e-commerce photography scene prompts.\n\n"
+        f"Product: {product_description}\n\n"
+        f"Requirements:\n"
+        f"- Cover different visual contexts: pure studio shot, lifestyle scene, flat lay, seasonal/themed, outdoor, etc.\n"
+        f"- Each scene must naturally showcase the product as the hero subject\n"
+        f"- Vary lighting styles, backgrounds, and compositions\n"
+        f"- Keep each prompt concise (40-80 words) and ready to use for image generation\n\n"
+        f"Output a valid JSON array of exactly {scene_count} English strings.\n"
+        f"Format: [\"scene 1 prompt\", \"scene 2 prompt\", ...]\n"
+        f"Output the JSON array only, no other text."
+    )
+
+
+def _parse_scenes_from_response(raw: str, expected_count: int) -> List[str]:
+    """从模型响应中解析场景 prompt 列表，支持 JSON 数组或降级换行分割"""
+    # 去除 <think>...</think> 思考块
+    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', raw, flags=re.IGNORECASE).strip()
+    # 尝试提取 JSON 数组
+    match = re.search(r'\[[\s\S]*?\]', cleaned)
+    if match:
+        try:
+            scenes = json.loads(match.group())
+            if isinstance(scenes, list):
+                return [str(s).strip() for s in scenes if str(s).strip()][:expected_count]
+        except json.JSONDecodeError:
+            pass
+    # 降级：按行分割并清理编号
+    lines = [l.strip() for l in cleaned.split('\n') if l.strip()]
+    scenes = []
+    for line in lines:
+        cleaned_line = re.sub(r'^[\d\.\-\*\s]+', '', line).strip('"\'')
+        if cleaned_line and len(cleaned_line) > 10:
+            scenes.append(cleaned_line)
+    return scenes[:expected_count]
+
+
+async def understand_product(image_path: str) -> str:
+    """调用 Qwen VL 模型分析产品图片，返回英文产品描述"""
+    vl_model = os.getenv("QWEN_VL_MODEL", "qwen3-vl-plus")
+    await aliyun_rate_limiter.wait(vl_model)
+    with open(image_path, "rb") as f:
+        b64_data = base64.b64encode(f.read()).decode("utf-8")
+    ext = os.path.splitext(image_path)[1].lower().lstrip(".").replace("jpg", "jpeg") or "jpeg"
+    messages = [{"role": "user", "content": [
+        {"image": f"data:image/{ext};base64,{b64_data}"},
+        {"text": _PRODUCT_UNDERSTAND_PROMPT},
+    ]}]
+    rsp = await asyncio.to_thread(MultiModalConversation.call, model=vl_model, messages=messages)
+    if rsp.status_code != 200:
+        raise Exception(f"Qwen VL 产品理解失败: {rsp.message}")
+    for item in rsp.output.choices[0].message.content:
+        if "text" in item:
+            return item["text"].strip()
+    raise Exception("Qwen VL 未返回产品描述")
+
+
+async def call_qwen_text_model(prompt: str, system_prompt: str = "") -> str:
+    """调用 Qwen3 文本推理模型，返回文本响应"""
+    model_id = os.getenv("QWEN_TEXT_MODEL", "qwen3-235b-a22b")
+    await aliyun_rate_limiter.wait(model_id)
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    rsp = await asyncio.to_thread(
+        Generation.call,
+        model=model_id,
+        messages=messages,
+        result_format="message",
+        enable_thinking=False,  # 关闭思考模式，减少 token 消耗
+    )
+    if rsp.status_code != 200:
+        raise Exception(f"Qwen 文本模型调用失败: {rsp.message}")
+    return rsp.output.choices[0].message.content.strip()
+
+
+# ==========================================
+# 用户设置持久化
+# ==========================================
+def _user_settings_path(username: str) -> str:
+    return f"users/{username}/settings.json"
+
+
+def load_user_settings(username: str) -> dict:
+    path = _user_settings_path(username)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_user_settings_sync(username: str, settings: dict):
+    path = _user_settings_path(username)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
 
 # ==========================================
 # 万相视频生成 - DashScope OSS 文件上传
@@ -1063,6 +1212,111 @@ def delete_template(scope: str, name: str, curr: dict = Depends(get_current_user
         json.dump(items, open(target, "w", encoding="utf-8"), ensure_ascii=False)
     return {"success": True}
 
+@app.get("/api/settings")
+def get_settings(curr: dict = Depends(get_current_user)):
+    return load_user_settings(curr["username"])
+
+
+@app.post("/api/settings")
+async def update_settings(request: Request, curr: dict = Depends(get_current_user)):
+    data = await request.json()
+    settings = load_user_settings(curr["username"])
+    settings.update(data)
+    save_user_settings_sync(curr["username"], settings)
+    return settings
+
+
+@app.post("/api/ecommerce/understand")
+async def ecommerce_understand(
+    images: Optional[List[UploadFile]] = File(None),
+    curr: dict = Depends(get_current_user)
+):
+    """Step 1：Qwen VL 分析每张产品图，返回产品描述"""
+    user = curr["username"]
+    vl_model = os.getenv("QWEN_VL_MODEL", "qwen3-vl-plus")
+    user_dir = f"users/{user}/outputs"
+    os.makedirs(user_dir, exist_ok=True)
+
+    if not images:
+        return JSONResponse(status_code=400, content={"error": "请上传至少一张产品图片"})
+
+    items = []
+    for img in images:
+        if not img or not getattr(img, "filename", None):
+            continue
+        fname = f"{uuid.uuid4().hex[:8]}_{img.filename}"
+        path = os.path.join(user_dir, fname)
+        img_data = await img.read()
+        with open(path, "wb") as f:
+            f.write(img_data)
+
+        display_url = f"/api/images/{user}/{fname}"
+        try:
+            description = await understand_product(path)
+            credit_cost = get_vl_credit_per_call(vl_model)
+            await deduct_credits(user, credit_cost)
+            items.append({
+                "image_path": path,
+                "image_name": img.filename,
+                "display_url": display_url,
+                "description": description,
+                "credit_cost": credit_cost,
+            })
+        except Exception as e:
+            items.append({
+                "image_path": path,
+                "image_name": img.filename,
+                "display_url": display_url,
+                "description": "",
+                "error": str(e),
+            })
+
+    return {"items": items}
+
+
+@app.post("/api/ecommerce/scenes")
+async def ecommerce_scenes(request: Request, curr: dict = Depends(get_current_user)):
+    """Step 2：Qwen3 文本模型为每个产品描述生成电商场景 prompt 列表"""
+    user = curr["username"]
+    data = await request.json()
+    items_in = data.get("items", [])
+    scene_count = max(1, min(int(data.get("scene_count", 3)), 20))
+    text_model = os.getenv("QWEN_TEXT_MODEL", "qwen3-235b-a22b")
+
+    items_out = []
+    for item in items_in:
+        desc = (item.get("description") or "").strip()
+        image_path = item.get("image_path", "")
+        image_name = item.get("image_name", "")
+        display_url = item.get("display_url", "")
+        if not desc:
+            items_out.append({
+                "image_path": image_path, "image_name": image_name,
+                "display_url": display_url, "description": desc,
+                "scenes": [], "error": "产品描述为空，无法生成场景",
+            })
+            continue
+        try:
+            scene_prompt = _build_scene_prompt(desc, scene_count)
+            raw = await call_qwen_text_model(scene_prompt, _SCENE_GENERATE_SYSTEM_PROMPT)
+            scenes = _parse_scenes_from_response(raw, scene_count)
+            credit_cost = get_text_credit_per_call(text_model)
+            await deduct_credits(user, credit_cost)
+            items_out.append({
+                "image_path": image_path, "image_name": image_name,
+                "display_url": display_url, "description": desc,
+                "scenes": scenes, "credit_cost": credit_cost,
+            })
+        except Exception as e:
+            items_out.append({
+                "image_path": image_path, "image_name": image_name,
+                "display_url": display_url, "description": desc,
+                "scenes": [], "error": str(e),
+            })
+
+    return {"items": items_out}
+
+
 @app.post("/api/jobs")
 async def create_job(
     prompts: str = Form(""), negative_prompt: str = Form(""), mode: str = Form(...),
@@ -1071,8 +1325,31 @@ async def create_job(
     video_size: str = Form("1280*720"), video_duration: int = Form(5),
     video_shot_type: str = Form("single"), video_audio: bool = Form(True),
     video_watermark: bool = Form(False),
+    ecommerce_data: str = Form(""),
     images: Optional[List[UploadFile]] = File(None), curr: dict = Depends(get_current_user)
 ):
+    # ── 电商场景模式：直接构建子任务并提交，提前返回 ──
+    if mode == "ecommerce":
+        if not ecommerce_data:
+            return JSONResponse(status_code=400, content={"error": "ecommerce mode requires ecommerce_data"})
+        try:
+            ec_items = json.loads(ecommerce_data)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "ecommerce_data JSON 格式错误"})
+        source_paths_ec, prompts_ec = [], []
+        for item in ec_items:
+            for scene in item.get("scenes", []):
+                if scene.strip():
+                    source_paths_ec.append(item["image_path"])
+                    prompts_ec.append(scene.strip())
+        if not prompts_ec:
+            return JSONResponse(status_code=400, content={"error": "没有有效的场景数据"})
+        job = await job_queue.add_job(
+            curr['username'], "ecommerce", prompts_ec, source_paths_ec,
+            template_name, model_id, negative_prompt, 1, target_ratio, video_params=None
+        )
+        return job
+
     prompt_str = prompts.strip()
 
     if mode == "fission" and not prompt_str:

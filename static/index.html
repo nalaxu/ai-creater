@@ -194,6 +194,11 @@
                                         class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
                                         <i class="fas fa-magic mr-2"></i>图案提取生图
                                     </button>
+                                    <button @click="form.mode = 'ecommerce'"
+                                        :class="form.mode === 'ecommerce' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-600 hover:bg-gray-50'"
+                                        class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
+                                        <i class="fas fa-store-alt mr-2"></i>电商场景生图
+                                    </button>
                                     <button @click="form.mode = 'video'"
                                         :class="form.mode === 'video' ? 'bg-white text-rose-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'"
                                         class="px-6 py-2 rounded-full font-semibold transition-all text-sm">
@@ -327,7 +332,7 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract' && form.mode !== 'ecommerce'">
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="block text-sm font-semibold text-gray-700">
                                             <i class="fas fa-bookmark text-indigo-500 mr-1"></i>快捷加载提示模板 <span
@@ -362,7 +367,7 @@
                                     </div>
                                 </div>
 
-                                <div v-show="['i2i', 'fission', 'convert', 'video', 'extract'].includes(form.mode)" class="mb-8">
+                                <div v-show="['i2i', 'fission', 'convert', 'video', 'extract', 'ecommerce'].includes(form.mode)" class="mb-8">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         <span v-if="form.mode === 'convert'">上传需要重绘比例的图片</span>
                                         <span v-else-if="form.mode === 'video'">参考素材上传 <span
@@ -370,12 +375,14 @@
                                                 ≤ 3 段)</span></span>
                                         <span v-else-if="form.mode === 'extract'">产品图片上传 <span
                                                 class="text-xs font-normal text-indigo-400 ml-1">(AI 将自动识别图案并生成变体，每张图独立处理)</span></span>
+                                        <span v-else-if="form.mode === 'ecommerce'">产品图片上传 <span
+                                                class="text-xs font-normal text-purple-500 ml-1">(AI 将分析产品并生成多个电商场景展示图)</span></span>
                                         <span v-else>参考图片上传 <span
                                                 class="text-xs font-normal text-gray-400 ml-1">(图生图每张独立生成，裂变模式单图扩增多张)</span></span>
                                     </label>
                                     <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
                                         @drop.prevent="onDrop" @paste.prevent="handlePaste"
-                                        :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video', 'border-indigo-200 bg-indigo-50/30': !isDragging && form.mode === 'extract', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging && form.mode !== 'extract'}"
+                                        :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-purple-500 bg-purple-50 ring-4 ring-purple-50': isDragging && form.mode === 'ecommerce', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video' && form.mode !== 'ecommerce', 'border-purple-200 bg-purple-50/30': !isDragging && form.mode === 'ecommerce', 'border-indigo-200 bg-indigo-50/30': !isDragging && form.mode === 'extract', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging && form.mode !== 'extract' && form.mode !== 'ecommerce'}"
                                         class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[200px]"
                                         @click="triggerFileInput" tabindex="0">
                                         <div class="space-y-3 text-center pointer-events-none">
@@ -459,7 +466,40 @@
                                     </p>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'extract'">
+                                <!-- 电商场景设置 -->
+                                <div v-show="form.mode === 'ecommerce'" class="mb-6 bg-purple-50 border border-purple-100 rounded-xl p-4">
+                                    <label class="font-semibold text-sm text-purple-800 mb-3 block">
+                                        <i class="fas fa-store-alt mr-1.5 text-purple-500"></i>电商场景生图设置
+                                    </label>
+                                    <div class="mb-4">
+                                        <label class="text-xs text-purple-700 font-medium">生成场景数量：
+                                            <span class="font-bold text-purple-600 text-base ml-1">{{ ecSettings.scene_count }}</span> 个场景
+                                        </label>
+                                        <input type="range" v-model.number="ecSettings.scene_count" min="1" max="10" step="1"
+                                            class="w-full h-2 rounded-lg appearance-none cursor-pointer mt-1.5"
+                                            style="accent-color: #9333ea;">
+                                        <p class="text-xs text-purple-500 mt-1.5">每张产品图将生成 {{ ecSettings.scene_count }} 个不同电商展示场景的图片</p>
+                                    </div>
+                                    <div class="flex items-center mb-2.5">
+                                        <input type="checkbox" id="oneshot-cb" v-model="ecSettings.one_shot"
+                                            class="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500">
+                                        <label for="oneshot-cb" class="ml-2 text-sm text-purple-700 font-medium">一步到位（全自动，跳过所有确认步骤）</label>
+                                    </div>
+                                    <div v-if="!ecSettings.one_shot" class="space-y-2 border-t border-purple-100 pt-3">
+                                        <div class="flex items-center">
+                                            <input type="checkbox" id="skip-step1-cb" v-model="ecSettings.skip_step1_review"
+                                                class="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500">
+                                            <label for="skip-step1-cb" class="ml-2 text-xs text-purple-600">跳过产品描述确认（步骤 1）</label>
+                                        </div>
+                                        <div class="flex items-center">
+                                            <input type="checkbox" id="skip-step2-cb" v-model="ecSettings.skip_step2_review"
+                                                class="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500">
+                                            <label for="skip-step2-cb" class="ml-2 text-xs text-purple-600">跳过场景方案确认（步骤 2）</label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'extract' && form.mode !== 'ecommerce'">
                                     <label
                                         class="flex justify-between items-center text-sm font-semibold text-gray-700 mb-2">
                                         <span>
@@ -481,7 +521,7 @@
                                     </p>
                                 </div>
 
-                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract'">
+                                <div class="mb-8" v-show="form.mode !== 'convert' && form.mode !== 'video' && form.mode !== 'extract' && form.mode !== 'ecommerce'">
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         反向提示词 <span class="text-xs font-normal text-gray-400 ml-1">(Negative Prompt:
                                             不希望出现的元素)</span>
@@ -491,11 +531,11 @@
                                         placeholder="例如：白边, 阴影, 变形, 裁剪, 局部特写..."></textarea>
                                 </div>
 
-                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : (isAliyunModel(form.model_id) && userCredit !== null && userCredit < estimateCredits() ? 'bg-red-50 border-red-200' : 'bg-indigo-50/60 border-indigo-100')"
+                                <div :class="form.mode === 'video' ? 'bg-rose-50 border-rose-100' : form.mode === 'ecommerce' ? 'bg-purple-50/60 border-purple-100' : (isAliyunModel(form.model_id) && userCredit !== null && userCredit < estimateCredits() ? 'bg-red-50 border-red-200' : 'bg-indigo-50/60 border-indigo-100')"
                                     class="flex items-center justify-between p-4 rounded-xl border flex-wrap gap-3">
                                     <div class="text-sm font-medium text-gray-500 flex flex-col gap-1">
                                         <div>
-                                            即将提交: <span class="font-bold text-lg" :class="form.mode === 'video' ? 'text-rose-600' : 'text-indigo-600'">{{
+                                            即将提交: <span class="font-bold text-lg" :class="form.mode === 'video' ? 'text-rose-600' : form.mode === 'ecommerce' ? 'text-purple-600' : 'text-indigo-600'">{{
                                                 calculateTotalTasks() }}</span>
                                             个任务
                                             <!-- 阿里云模型积分预估 -->
@@ -511,17 +551,19 @@
                                         </div>
                                     </div>
                                     <button @click="submitJob" :disabled="isSubmitDisabled"
-                                        :class="form.mode === 'video' ? 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'"
+                                        :class="form.mode === 'video' ? 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500' : form.mode === 'ecommerce' ? 'bg-purple-600 hover:bg-purple-700 focus:ring-purple-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'"
                                         class="inline-flex items-center px-8 py-3.5 border border-transparent text-base font-bold rounded-xl shadow-lg text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5">
                                         <i class="fas fa-paper-plane mr-2"
-                                            v-if="!isSubmitting && !['convert','video','extract'].includes(form.mode)"></i>
+                                            v-if="!isSubmitting && !['convert','video','extract','ecommerce'].includes(form.mode)"></i>
                                         <i class="fas fa-crop-alt mr-2"
                                             v-if="!isSubmitting && form.mode === 'convert'"></i>
                                         <i class="fas fa-magic mr-2"
                                             v-if="!isSubmitting && form.mode === 'extract'"></i>
+                                        <i class="fas fa-store-alt mr-2"
+                                            v-if="!isSubmitting && form.mode === 'ecommerce'"></i>
                                         <i class="fas fa-film mr-2" v-if="!isSubmitting && form.mode === 'video'"></i>
                                         <i class="fas fa-spinner fa-spin mr-2 text-lg" v-if="isSubmitting"></i>
-                                        {{ isSubmitting ? '处理中...' : (form.mode === 'convert' ? '提交 AI 重绘' : form.mode === 'extract' ? '提交图案提取' : form.mode === 'video' ? '提交视频生成' : '提交生成') }}
+                                        {{ isSubmitting ? (form.mode === 'ecommerce' ? 'AI 分析中...' : '处理中...') : (form.mode === 'convert' ? '提交 AI 重绘' : form.mode === 'extract' ? '提交图案提取' : form.mode === 'video' ? '提交视频生成' : form.mode === 'ecommerce' ? '开始电商生图' : '提交生成') }}
                                     </button>
                                 </div>
                             </div>
@@ -565,10 +607,10 @@
                                     <div class="h-4 w-px bg-gray-300"></div>
                                     <span class="text-sm font-bold text-gray-700 flex items-center">
                                         <span class="bg-white p-1 rounded inline-flex shadow-sm mr-2">
-                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : job.mode === 'video' ? 'fas fa-film text-rose-500' : job.mode === 'extract' ? 'fas fa-magic text-indigo-500' : 'fas fa-sitemap text-emerald-500'"
+                                            <i :class="job.mode === 't2i' ? 'fas fa-font text-indigo-500' : job.mode === 'i2i' ? 'fas fa-images text-purple-500' : job.mode === 'convert' ? 'fas fa-crop-alt text-blue-500' : job.mode === 'video' ? 'fas fa-film text-rose-500' : job.mode === 'extract' ? 'fas fa-magic text-indigo-500' : job.mode === 'ecommerce' ? 'fas fa-store-alt text-purple-500' : 'fas fa-sitemap text-emerald-500'"
                                                 class="w-4 text-center"></i>
                                         </span>
-                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode === 'convert' ? 'AI尺寸重绘' : job.mode === 'video' ? '视频生成任务' : job.mode === 'extract' ? '图案提取生图' : '图片裂变任务' }}
+                                        {{ job.mode === 't2i' ? '文生图任务' : job.mode === 'i2i' ? '图生图任务' : job.mode === 'convert' ? 'AI尺寸重绘' : job.mode === 'video' ? '视频生成任务' : job.mode === 'extract' ? '图案提取生图' : job.mode === 'ecommerce' ? '电商场景生图' : '图片裂变任务' }}
                                     </span>
                                     <span class="text-xs text-gray-500 ml-2" v-if="job.model_id">
                                         [<i class="fas fa-microchip mr-1"></i>{{ job.model_id }}]
@@ -911,6 +953,156 @@
         </div>
         <!-- ===== 任务详情 Modal End ===== -->
 
+        <!-- ===== 电商场景：步骤加载遮罩 ===== -->
+        <div v-if="['step1_loading','step2_loading','job_submitting'].includes(ecFlowState)"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm">
+            <div class="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 min-w-[260px]">
+                <div class="w-12 h-12 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
+                <div class="text-center">
+                    <p class="font-semibold text-gray-800">
+                        <span v-if="ecFlowState === 'step1_loading'">AI 正在分析产品图片...</span>
+                        <span v-else-if="ecFlowState === 'step2_loading'">AI 正在生成场景方案...</span>
+                        <span v-else>正在提交生成任务...</span>
+                    </p>
+                    <p class="text-xs text-gray-400 mt-1">请稍候，勿关闭页面</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 电商场景：步骤 1 产品描述 Review Modal ===== -->
+        <div v-if="ecFlowState === 'step1_review'"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
+            <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-2xl flex flex-col" style="max-height:88vh">
+                <div class="flex justify-between items-center mb-4 border-b border-gray-100 pb-4">
+                    <h3 class="text-lg font-bold text-gray-900 flex items-center gap-2">
+                        <span class="bg-purple-100 text-purple-700 text-xs font-bold px-2.5 py-0.5 rounded-full">步骤 1 / 3</span>
+                        AI 产品分析结果确认
+                    </h3>
+                    <button @click="cancelEcommerceFlow" class="text-gray-400 hover:text-gray-600 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mb-4">AI 已分析您的产品图片，请确认或修改产品描述（英文效果更佳），这将影响后续场景生成的质量。</p>
+                <div class="overflow-y-auto custom-scrollbar flex-1 space-y-4 pr-1">
+                    <div v-for="(item, idx) in ecStep1Data" :key="idx"
+                        class="border border-gray-200 rounded-xl p-4">
+                        <div class="flex items-start gap-3 mb-3">
+                            <img :src="item.display_url + '?token=' + getToken()"
+                                class="w-16 h-16 object-cover rounded-lg border border-gray-200 flex-shrink-0 bg-gray-100"
+                                :alt="item.image_name" @error="$event.target.style.display='none'">
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-semibold text-gray-700 truncate">{{ item.image_name }}</p>
+                                <p v-if="item.error" class="text-xs text-red-500 mt-1"><i class="fas fa-exclamation-circle mr-1"></i>{{ item.error }}</p>
+                                <p v-else class="text-xs text-green-600 mt-1"><i class="fas fa-check-circle mr-1"></i>分析完成</p>
+                            </div>
+                        </div>
+                        <label class="text-xs font-semibold text-gray-600 mb-1.5 block">产品描述（可编辑）</label>
+                        <textarea v-model="item.description" rows="4"
+                            class="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-purple-500 focus:border-purple-500 bg-gray-50 resize-none"
+                            :placeholder="item.error ? '描述提取失败，请手动输入产品描述（英文）...' : ''"></textarea>
+                    </div>
+                </div>
+                <div class="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center">
+                        <input type="checkbox" id="save-skip-step1" v-model="ecSettings.skip_step1_review"
+                            @change="saveEcSettings" class="w-4 h-4 text-purple-600 border-gray-300 rounded">
+                        <label for="save-skip-step1" class="ml-2 text-xs text-gray-500">以后跳过此步骤</label>
+                    </div>
+                    <div class="flex gap-3">
+                        <button @click="cancelEcommerceFlow"
+                            class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50 transition-colors">取消</button>
+                        <button @click="proceedToStep2"
+                            class="px-5 py-2 bg-purple-600 text-white rounded-xl text-sm hover:bg-purple-700 shadow-sm transition-colors font-semibold">
+                            确认，生成场景方案 <i class="fas fa-arrow-right ml-1.5"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 电商场景：步骤 2 场景方案 Review Modal ===== -->
+        <div v-if="ecFlowState === 'step2_review'"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
+            <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-2xl flex flex-col" style="max-height:92vh">
+                <div class="flex justify-between items-center mb-4 border-b border-gray-100 pb-4">
+                    <h3 class="text-lg font-bold text-gray-900 flex items-center gap-2">
+                        <span class="bg-purple-100 text-purple-700 text-xs font-bold px-2.5 py-0.5 rounded-full">步骤 2 / 3</span>
+                        场景方案确认
+                    </h3>
+                    <button @click="cancelEcommerceFlow" class="text-gray-400 hover:text-gray-600 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mb-4">AI 已为每张产品图生成场景方案，您可以编辑、删除或添加场景后提交生成。</p>
+                <div class="overflow-y-auto custom-scrollbar flex-1 space-y-5 pr-1">
+                    <div v-for="(item, idx) in ecStep2Data" :key="idx"
+                        class="border border-gray-200 rounded-xl p-4">
+                        <div class="flex items-center gap-3 mb-3">
+                            <img :src="item.display_url + '?token=' + getToken()"
+                                class="w-12 h-12 object-cover rounded-lg border border-gray-200 flex-shrink-0 bg-gray-100"
+                                :alt="item.image_name" @error="$event.target.style.display='none'">
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-gray-700 truncate">{{ item.image_name }}</p>
+                                <p class="text-xs text-gray-400 truncate max-w-sm" :title="item.description">{{ item.description }}</p>
+                            </div>
+                        </div>
+                        <div v-if="item.error" class="mb-2 text-xs text-red-500"><i class="fas fa-exclamation-circle mr-1"></i>{{ item.error }}</div>
+                        <div class="space-y-2">
+                            <div v-for="(scene, scIdx) in item.scenes" :key="scIdx" class="flex items-start gap-2">
+                                <div class="flex-1">
+                                    <span class="text-xs text-gray-400 font-semibold block mb-1">场景 {{ scIdx + 1 }}</span>
+                                    <textarea v-model="item.scenes[scIdx]" rows="2"
+                                        class="w-full border border-gray-200 rounded-lg p-2.5 text-xs focus:ring-purple-500 focus:border-purple-500 bg-gray-50 resize-none"></textarea>
+                                </div>
+                                <button @click="item.scenes.splice(scIdx, 1)"
+                                    class="text-red-400 hover:text-red-600 mt-6 flex-shrink-0 transition-colors">
+                                    <i class="fas fa-times-circle"></i>
+                                </button>
+                            </div>
+                            <button @click="item.scenes.push('')"
+                                class="text-xs text-purple-600 hover:text-purple-800 flex items-center gap-1 mt-1 transition-colors">
+                                <i class="fas fa-plus-circle"></i>添加场景
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 pt-4 border-t border-gray-100">
+                    <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+                        <div class="flex items-center gap-3">
+                            <label class="text-xs font-semibold text-gray-600">输出图片比例</label>
+                            <select v-model="form.target_ratio"
+                                class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-purple-500 focus:border-purple-500">
+                                <option value="1:1">1:1 方形</option>
+                                <option value="3:4">3:4 竖版</option>
+                                <option value="4:3">4:3 横版</option>
+                                <option value="9:16">9:16 手机版</option>
+                                <option value="16:9">16:9 横屏</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center">
+                            <input type="checkbox" id="save-skip-step2" v-model="ecSettings.skip_step2_review"
+                                @change="saveEcSettings" class="w-4 h-4 text-purple-600 border-gray-300 rounded">
+                            <label for="save-skip-step2" class="ml-2 text-xs text-gray-500">以后跳过此步骤</label>
+                        </div>
+                    </div>
+                    <div class="flex gap-3 justify-between">
+                        <button @click="backToStep1"
+                            class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50 transition-colors">
+                            <i class="fas fa-arrow-left mr-1.5"></i>返回修改描述
+                        </button>
+                        <div class="flex gap-3">
+                            <button @click="cancelEcommerceFlow"
+                                class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50 transition-colors">取消</button>
+                            <button @click="proceedToSubmit"
+                                class="px-5 py-2 bg-purple-600 text-white rounded-xl text-sm hover:bg-purple-700 shadow-sm transition-colors font-semibold">
+                                <i class="fas fa-magic mr-1.5"></i>提交生成任务
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div v-if="showSaveTemplateModal"
             class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
             <div class="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 w-full max-w-lg transform transition-all">
@@ -1086,6 +1278,14 @@
                         const imgCost = (_IMAGE_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN;
                         return Math.round(imgCount * (vlCost + batchSize * imgCost) * 10000) / 10000;
                     }
+                    if (mode === 'ecommerce') {
+                        const imgCount = form.value.files.length || 1;
+                        const sceneCount = ecSettings.value.scene_count || 3;
+                        const vlCost = (_VL_EST_INPUT / 1e6 * _VL_PRICE.input + _VL_EST_OUTPUT / 1e6 * _VL_PRICE.output) * _CREDITS_PER_YUAN;
+                        const textCost = (400 / 1e6 * 1.0 + 400 / 1e6 * 8.0) * _CREDITS_PER_YUAN; // qwen3-235b-a22b
+                        const imgCost = (_IMAGE_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN;
+                        return Math.round(imgCount * (vlCost + textCost + sceneCount * imgCost) * 10000) / 10000;
+                    }
                     return Math.round(calculateTotalTasks() * (_IMAGE_PRICE[modelId] ?? 0.5) * _CREDITS_PER_YUAN * 10000) / 10000;
                 };
 
@@ -1098,8 +1298,14 @@
 
                 const currentTab = ref('create');
                 const availableModels = ref([]);
-                const form = ref({ mode: 't2i', model_id: 'gemini-3.1-flash-image', prompts: '', negative_prompt: '', files: [], selectedTemplate: '', batch_size: 4, target_ratio: '', videoParams: { size: '1280*720', duration: 5, shot_type: 'single', audio: true, watermark: false } });
+                const form = ref({ mode: 't2i', model_id: 'gemini-3.1-flash-image', prompts: '', negative_prompt: '', files: [], selectedTemplate: '', batch_size: 4, target_ratio: '1:1', videoParams: { size: '1280*720', duration: 5, shot_type: 'single', audio: true, watermark: false } });
                 const templates = ref({ public: [], private: [] });
+
+                // ── 电商场景生图状态 ──
+                const ecFlowState = ref('idle'); // idle | step1_loading | step1_review | step2_loading | step2_review | job_submitting
+                const ecStep1Data = ref([]);
+                const ecStep2Data = ref([]);
+                const ecSettings = ref({ skip_step1_review: false, skip_step2_review: false, one_shot: false, scene_count: 3 });
 
                 const showSaveTemplateModal = ref(false);
                 const showTemplateManagerModal = ref(false);
@@ -1130,18 +1336,21 @@
                 const calculateTotalTasks = () => {
                     if (form.value.mode === 'video') return 1;
                     if (form.value.mode === 'extract') return form.value.files.length > 0 ? form.value.files.length : 1;
+                    if (form.value.mode === 'ecommerce') return (form.value.files.length || 1) * (ecSettings.value.scene_count || 3);
                     let fileCount = ['i2i', 'fission', 'convert'].includes(form.value.mode) && form.value.files.length > 0 ? form.value.files.length : 1;
                     let bSize = form.value.mode === 'fission' ? form.value.batch_size : 1;
                     return fileCount * bSize;
                 };
 
                 const isSubmitDisabled = computed(() => {
-                    if (isSubmitting.value) return true;
+                    if (isSubmitting.value || ecFlowState.value !== 'idle') return true;
                     if (form.value.mode === 'convert') {
                         if (form.value.files.length === 0 || !form.value.target_ratio) return true;
                     } else if (form.value.mode === 'video') {
                         if (!form.value.prompts.trim()) return true;
                     } else if (form.value.mode === 'extract') {
+                        if (form.value.files.length === 0) return true;
+                    } else if (form.value.mode === 'ecommerce') {
                         if (form.value.files.length === 0) return true;
                     } else {
                         if (form.value.mode !== 'fission' && !form.value.prompts.trim()) return true;
@@ -1205,7 +1414,7 @@
                 };
 
                 const initializeUserSpace = () => {
-                    fetchModels(); fetchTemplates(); fetchJobs(); fetchCredit();
+                    fetchModels(); fetchTemplates(); fetchJobs(); fetchCredit(); fetchSettings();
                     if (!pollInterval) {
                         pollInterval = setInterval(() => {
                             if (user.value) { fetchCredit(); if (currentTab.value === 'jobs') fetchJobs(); }
@@ -1314,7 +1523,7 @@
                 const handlePaste = (event) => {
                     const items = event.clipboardData && event.clipboardData.items;
                     if (!items) return;
-                    if (!['i2i', 'fission', 'convert', 'video', 'extract'].includes(form.value.mode)) return;
+                    if (!['i2i', 'fission', 'convert', 'video', 'extract', 'ecommerce'].includes(form.value.mode)) return;
                     Array.from(items).forEach(item => {
                         if (item.kind === 'file') {
                             const file = item.getAsFile();
@@ -1339,7 +1548,134 @@
                     return objectUrls.value[file.name];
                 };
 
+                // ── 电商场景生图流程 ──
+                const fetchSettings = async () => {
+                    try {
+                        const res = await authFetch('/api/settings');
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.ecommerce) Object.assign(ecSettings.value, data.ecommerce);
+                        }
+                    } catch (e) {}
+                };
+
+                const saveEcSettings = async () => {
+                    try {
+                        await authFetch('/api/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ecommerce: { ...ecSettings.value } })
+                        });
+                    } catch (e) {}
+                };
+
+                const cancelEcommerceFlow = () => {
+                    ecFlowState.value = 'idle';
+                    isSubmitting.value = false;
+                };
+
+                const runEcommerceStep2 = async () => {
+                    ecFlowState.value = 'step2_loading';
+                    try {
+                        const res = await authFetch('/api/ecommerce/scenes', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                items: ecStep1Data.value.map(item => ({
+                                    image_path: item.image_path,
+                                    image_name: item.image_name,
+                                    display_url: item.display_url,
+                                    description: item.description,
+                                })),
+                                scene_count: ecSettings.value.scene_count,
+                            })
+                        });
+                        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'AI 场景生成失败'); }
+                        const data = await res.json();
+                        ecStep2Data.value = data.items;
+                        if (ecSettings.value.one_shot || ecSettings.value.skip_step2_review) {
+                            await runEcommerceJobSubmit();
+                        } else {
+                            ecFlowState.value = 'step2_review';
+                            isSubmitting.value = false;
+                        }
+                    } catch (e) {
+                        alert('场景方案生成失败：' + e.message);
+                        cancelEcommerceFlow();
+                    }
+                };
+
+                const proceedToStep2 = async () => {
+                    isSubmitting.value = true;
+                    await runEcommerceStep2();
+                };
+
+                const backToStep1 = () => { ecFlowState.value = 'step1_review'; };
+
+                const runEcommerceJobSubmit = async () => {
+                    ecFlowState.value = 'job_submitting';
+                    try {
+                        const ecData = ecStep2Data.value
+                            .map(item => ({ image_path: item.image_path, scenes: (item.scenes || []).filter(s => s.trim()) }))
+                            .filter(item => item.scenes.length > 0);
+                        if (!ecData.length) throw new Error('没有有效的场景数据，请至少保留一个场景');
+
+                        const fd = new FormData();
+                        fd.append('mode', 'ecommerce');
+                        fd.append('model_id', form.value.model_id);
+                        fd.append('target_ratio', form.value.target_ratio || '1:1');
+                        fd.append('batch_size', 1);
+                        fd.append('ecommerce_data', JSON.stringify(ecData));
+                        fd.append('prompts', '');
+                        fd.append('negative_prompt', form.value.negative_prompt || '');
+                        fd.append('template_name', '');
+
+                        const res = await authFetch('/api/jobs', { method: 'POST', body: fd });
+                        const data = await res.json();
+                        if (!res.ok || !data.id) throw new Error(data.error || '任务提交失败');
+
+                        ecFlowState.value = 'idle';
+                        isSubmitting.value = false;
+                        form.value.files = [];
+                        currentTab.value = 'jobs';
+                        fetchJobs();
+                        fetchCredit();
+                    } catch (e) {
+                        alert('任务提交失败：' + e.message);
+                        cancelEcommerceFlow();
+                    }
+                };
+
+                const proceedToSubmit = async () => {
+                    isSubmitting.value = true;
+                    await runEcommerceJobSubmit();
+                };
+
+                const startEcommerceFlow = async () => {
+                    if (form.value.files.length === 0) { alert('请上传至少一张产品图片'); return; }
+                    isSubmitting.value = true;
+                    ecFlowState.value = 'step1_loading';
+                    try {
+                        const fd = new FormData();
+                        form.value.files.forEach(f => fd.append('images', f));
+                        const res = await authFetch('/api/ecommerce/understand', { method: 'POST', body: fd });
+                        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'AI 产品分析失败'); }
+                        const data = await res.json();
+                        ecStep1Data.value = data.items;
+                        if (ecSettings.value.one_shot || ecSettings.value.skip_step1_review) {
+                            await runEcommerceStep2();
+                        } else {
+                            ecFlowState.value = 'step1_review';
+                            isSubmitting.value = false;
+                        }
+                    } catch (e) {
+                        alert('产品分析失败：' + e.message);
+                        cancelEcommerceFlow();
+                    }
+                };
+
                 const submitJob = async () => {
+                    if (form.value.mode === 'ecommerce') { await startEcommerceFlow(); return; }
                     if (form.value.mode === 'convert' && !form.value.target_ratio) {
                         alert("请选择目标尺寸比例");
                         return;
@@ -1468,7 +1804,7 @@
                     } catch (error) { alert("下载文件时遇到错误！"); }
                 };
 
-                const MODE_LABELS = { t2i: '文本生图', i2i: '图像生图', fission: '图片裂变', convert: 'AI尺寸重绘', video: '视频生成', extract: '图案提取生图' };
+                const MODE_LABELS = { t2i: '文本生图', i2i: '图像生图', fission: '图片裂变', convert: 'AI尺寸重绘', video: '视频生成', extract: '图案提取生图', ecommerce: '电商场景生图' };
                 const getModeLabel = (mode) => MODE_LABELS[mode] || mode;
 
                 const getSubtaskResult = (job, subtaskId) => (job.results || []).find(r => r.task_id === subtaskId) || null;
@@ -1515,7 +1851,9 @@
                     openSaveModal, saveTemplate, editTemplate, deleteTemplate, handleLogin, handleLogout,
                     formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll,
                     isVideoFile, filteredModels, estimateCredits, isAliyunModel,
-                    jobDetailModal, openJobDetail, getModeLabel, getSubtaskResult
+                    jobDetailModal, openJobDetail, getModeLabel, getSubtaskResult,
+                    ecFlowState, ecStep1Data, ecStep2Data, ecSettings,
+                    cancelEcommerceFlow, proceedToStep2, proceedToSubmit, backToStep1, saveEcSettings
                 };
             }
         }).mount('#app');
