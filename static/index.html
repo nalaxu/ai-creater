@@ -381,7 +381,7 @@
                                                 class="text-xs font-normal text-gray-400 ml-1">(图生图每张独立生成，裂变模式单图扩增多张)</span></span>
                                     </label>
                                     <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
-                                        @drop.prevent="onDrop" @paste.prevent="handlePaste"
+                                        @drop.prevent="onDrop"
                                         :class="{'border-rose-400 bg-rose-50 ring-4 ring-rose-50': isDragging && form.mode === 'video', 'border-purple-500 bg-purple-50 ring-4 ring-purple-50': isDragging && form.mode === 'ecommerce', 'border-indigo-500 bg-indigo-50 ring-4 ring-indigo-50': isDragging && form.mode !== 'video' && form.mode !== 'ecommerce', 'border-purple-200 bg-purple-50/30': !isDragging && form.mode === 'ecommerce', 'border-indigo-200 bg-indigo-50/30': !isDragging && form.mode === 'extract', 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400': !isDragging && form.mode !== 'extract' && form.mode !== 'ecommerce'}"
                                         class="mt-1 flex flex-col justify-center items-center px-6 py-12 border-2 border-dashed rounded-xl transition-all cursor-pointer min-h-[200px]"
                                         @click="triggerFileInput" tabindex="0">

@@ -1339,9 +1339,16 @@ async def create_job(
         source_paths_ec, prompts_ec = [], []
         for item in ec_items:
             for scene in item.get("scenes", []):
-                if scene.strip():
+                scene = scene.strip()
+                if scene:
+                    wrapped = (
+                        f"Place the reference product (from the provided image) into this scene: {scene} "
+                        "CRITICAL: The product's appearance must be IDENTICAL to the reference image — "
+                        "preserve its exact shape, design, colors, branding, and surface details. "
+                        "Only the background, environment, lighting angle, and composition may change."
+                    )
                     source_paths_ec.append(item["image_path"])
-                    prompts_ec.append(scene.strip())
+                    prompts_ec.append(wrapped)
         if not prompts_ec:
             return JSONResponse(status_code=400, content={"error": "没有有效的场景数据"})
         job = await job_queue.add_job(
