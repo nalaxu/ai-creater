@@ -1277,6 +1277,27 @@
             </div>
         </div>
 
+    <!-- 下载命名弹窗 -->
+    <div v-if="dlDialog.show"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+            <h3 class="text-base font-bold text-gray-800 mb-4 flex items-center">
+                <i class="fas fa-download text-indigo-500 mr-2"></i>设置下载文件名
+            </h3>
+            <input v-model="dlDialog.inputName" @keyup.enter="confirmDownloadName" @keyup.esc="cancelDownload"
+                type="text" placeholder="输入文件名…"
+                class="dl-name-input w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none mb-4" />
+            <div class="flex gap-3 justify-end">
+                <button @click="cancelDownload"
+                    class="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">取消</button>
+                <button @click="confirmDownloadName"
+                    class="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
+                    <i class="fas fa-download mr-1.5"></i>下载
+                </button>
+            </div>
+        </div>
+    </div>
+
     </div>
 
     <script>
@@ -1287,7 +1308,7 @@
     </style>
 
     <script>
-        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+        const { createApp, ref, computed, watch, nextTick, onMounted, onUnmounted } = Vue;
 
         createApp({
             setup() {
@@ -1381,6 +1402,27 @@
                 const retryingJobs = ref({});
                 const retryingTasks = ref({});
                 const jobDetailModal = ref(null);
+
+                // 下载命名弹窗
+                const dlDialog = ref({ show: false, defaultName: '', inputName: '', resolve: null });
+                const promptDownloadName = (defaultName) => new Promise(resolve => {
+                    dlDialog.value = { show: true, defaultName, inputName: defaultName, resolve };
+                });
+                const confirmDownloadName = () => {
+                    const name = dlDialog.value.inputName.trim() || dlDialog.value.defaultName;
+                    dlDialog.value.show = false;
+                    dlDialog.value.resolve(name);
+                };
+                const cancelDownload = () => {
+                    dlDialog.value.show = false;
+                    dlDialog.value.resolve(null);
+                };
+                watch(() => dlDialog.value.show, (val) => {
+                    if (val) nextTick(() => {
+                        const el = document.querySelector('.dl-name-input');
+                        if (el) { el.focus(); el.select(); }
+                    });
+                });
                 const jobs = ref([]);
                 const fileInput = ref(null);
                 const objectUrls = ref({});
@@ -1926,6 +1968,8 @@
                 const renderMarkdown = (text) => text ? marked.parse(text) : '';
 
                 const downloadImage = async (url, filename) => {
+                    const name = await promptDownloadName(filename);
+                    if (name === null) return;
                     try {
                         const token = getToken();
                         const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
@@ -1934,7 +1978,7 @@
 
                         const blobUrl = URL.createObjectURL(await response.blob());
                         const a = document.createElement('a');
-                        a.href = blobUrl; a.download = filename; a.style.display = 'none';
+                        a.href = blobUrl; a.download = name; a.style.display = 'none';
                         document.body.appendChild(a); a.click();
                         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl); }, 1000);
                     } catch (error) { alert("下载文件时遇到错误！"); }
@@ -1957,6 +2001,9 @@
 
                 // 一键打包下载全部任务图片
                 const downloadAll = async (jobId) => {
+                    const defaultName = `job_${jobId.substring(0, 8)}_images.zip`;
+                    const name = await promptDownloadName(defaultName);
+                    if (name === null) return;
                     try {
                         const token = getToken();
                         const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
@@ -1966,7 +2013,7 @@
                         const blobUrl = URL.createObjectURL(await response.blob());
                         const a = document.createElement('a');
                         a.href = blobUrl;
-                        a.download = `job_${jobId.substring(0, 8)}_images.zip`;
+                        a.download = name;
                         a.style.display = 'none';
                         document.body.appendChild(a);
                         a.click();
@@ -1987,6 +2034,7 @@
                     removeFile, removeAllFiles, getObjectURL, submitJob, fetchJobs, deleteJob, retryFailedTasks, retryTask, hasFailedResults, handleTemplateSelect,
                     openSaveModal, openSaveModalFromResult, saveTemplate, editTemplate, deleteTemplate, handleLogin, handleLogout,
                     formatDate, renderMarkdown, downloadImage, getToken, hasImages, downloadAll,
+                    dlDialog, confirmDownloadName, cancelDownload,
                     isVideoFile, filteredModels, estimateCredits, isAliyunModel, multiLineCount,
                     jobDetailModal, openJobDetail, getModeLabel, getSubtaskResult,
                     ecFlowState, ecStep1Data, ecStep2Data, ecSettings,
