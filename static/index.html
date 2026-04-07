@@ -1425,7 +1425,7 @@
                 });
                 const jobs = ref([]);
                 const fileInput = ref(null);
-                const objectUrls = ref({});
+                const objectUrlCache = new WeakMap();
                 let pollInterval = null;
 
                 const getToken = () => localStorage.getItem('auth_token') || '';
@@ -1657,18 +1657,18 @@
 
                 const removeFile = (index) => {
                     const file = form.value.files[index];
-                    if (objectUrls.value[file.name]) { URL.revokeObjectURL(objectUrls.value[file.name]); delete objectUrls.value[file.name]; }
+                    if (objectUrlCache.has(file)) { URL.revokeObjectURL(objectUrlCache.get(file)); objectUrlCache.delete(file); }
                     form.value.files.splice(index, 1);
                 };
 
                 const removeAllFiles = () => {
-                    form.value.files.forEach(f => { if (objectUrls.value[f.name]) URL.revokeObjectURL(objectUrls.value[f.name]); });
-                    objectUrls.value = {}; form.value.files = [];
+                    form.value.files.forEach(f => { if (objectUrlCache.has(f)) { URL.revokeObjectURL(objectUrlCache.get(f)); objectUrlCache.delete(f); } });
+                    form.value.files = [];
                 };
 
                 const getObjectURL = (file) => {
-                    if (!objectUrls.value[file.name]) objectUrls.value[file.name] = URL.createObjectURL(file);
-                    return objectUrls.value[file.name];
+                    if (!objectUrlCache.has(file)) objectUrlCache.set(file, URL.createObjectURL(file));
+                    return objectUrlCache.get(file);
                 };
 
                 // ── 电商场景生图流程 ──
