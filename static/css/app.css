@@ -2,9 +2,9 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-/* 隐藏未挂载的 Vue 应用，防止 v-if 指令生效前页面内容短暂闪现 */
+/* 双保险：内联 <style> 是主力，此处兜底 */
 [v-cloak] {
-    display: none;
+    display: none !important;
 }
 
 .fade-enter-active,
