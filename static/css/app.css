@@ -2,6 +2,11 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/* 双保险：内联 <style> 是主力，此处兜底 */
+[v-cloak] {
+    display: none !important;
+}
+
 .fade-enter-active,
 .fade-leave-active {
     transition: opacity 0.3s;

@@ -9,6 +9,7 @@ import asyncio
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.job_queue import job_queue, process_queue
 from app.routes.auth_routes import router as auth_router
@@ -47,6 +48,20 @@ app.include_router(pipeline_router)
 async def startup_event():
     job_queue.load_jobs()
     asyncio.create_task(process_queue())
+
+
+# ------------------------------------------------------------------
+# index.html with no-cache headers (must be before StaticFiles catch-all)
+# ------------------------------------------------------------------
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+@app.get("/")
+async def serve_index():
+    return FileResponse("static/index.html", headers=_NO_CACHE_HEADERS)
 
 
 # ------------------------------------------------------------------

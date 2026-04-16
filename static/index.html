@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Creator Space</title>
+    <style>[v-cloak] { display: none !important; }</style>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
     { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
@@ -15,7 +16,7 @@
 </head>
 
 <body class="bg-gray-50 text-gray-800">
-    <div id="app">
+    <div id="app" v-cloak>
         <div v-if="!user" class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
             <div class="max-w-md w-full space-y-8 bg-white p-10 rounded-2xl shadow-xl border border-gray-100">
                 <div class="text-center">
