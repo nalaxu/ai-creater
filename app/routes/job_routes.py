@@ -95,7 +95,15 @@ async def create_job(
     prompt_str = prompts.strip()
 
     if mode == "fission" and not prompt_str:
-        prompt_str = "Generate a high-quality, stylistically similar variation of the provided reference image.it should incorporate a certain degree of variation and be different to the original."
+        prompt_str = (
+            "Create a creative variation of this reference image. "
+            "Preserve the core subject, its essential visual identity, and the overall artistic style. "
+            "Introduce clear, noticeable differences in at least two of the following dimensions: "
+            "background or environment, composition and framing, perspective or viewing angle, "
+            "lighting mood and color palette, or contextual props and surroundings. "
+            "The result must look distinctly different from the original at first glance, "
+            "while remaining recognizably the same subject."
+        )
     elif mode == "convert" and not prompt_str:
         prompt_str = "保持原图主体结构和风格不变，将画面自然延展或重绘以适应设定的新比例尺寸，边缘过渡自然。"
     elif mode == "extract":
